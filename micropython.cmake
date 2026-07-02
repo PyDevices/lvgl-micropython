@@ -9,7 +9,7 @@ get_filename_component(WORKSPACE_DIR ${LVMP_DIR} DIRECTORY)
 if(NOT DEFINED BINDINGS_DIR)
     set(BINDINGS_DIR ${WORKSPACE_DIR}/lv_bindings)
 endif()
-set(LVMP_C ${BINDINGS_DIR}/generated/lvmp.c)
+set(LVMP_C ${BINDINGS_DIR}/generated/lvgl_micropython.c)
 set(LVGL_DIR ${BINDINGS_DIR}/lvgl)
 file(GLOB_RECURSE SOURCES ${LVGL_DIR}/src/*.c ${LVMP_DIR}/lv_mem_core_micropython.c)
 

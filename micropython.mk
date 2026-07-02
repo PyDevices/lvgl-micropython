@@ -6,7 +6,7 @@
 
 LVMP_DIR := $(USERMOD_DIR)
 BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lv_bindings)
-LVMP_C := $(BINDINGS_DIR)/generated/lvmp.c
+LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")
 SOURCES += $(LVMP_DIR)/lv_mem_core_micropython.c

@@ -2,7 +2,7 @@
 
 MicroPython user C module glue for LVGL: `micropython.mk`, CMake usermod, GC-aware allocator, and smoke tests.
 
-Requires a sibling clone of [lv_bindings](https://github.com/PyDevices/lv_bindings) with `generated/lvmp.c` (run `regenerate_lvmp.sh`).
+Requires a sibling clone of [lv_bindings](https://github.com/PyDevices/lv_bindings) with `generated/lvgl_micropython.c` (run `regenerate_lvmp.sh`).
 
 ## Workspace layout
 

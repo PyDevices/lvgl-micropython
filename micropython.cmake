@@ -1,8 +1,11 @@
 # This file is used by MicroPython CMake-based builds such as the ESP32 and RP2 ports.
 # For Make-based builds, see the .mk file in the same directory.
 
-# When building Micropython, this file is to be given as:
-#     make USER_C_MODULES=<path to workspace root>/micropython.cmake
+# Point USER_C_MODULES at this repo (or this file) directly, e.g.:
+#     idf.py build -DUSER_C_MODULES=<path to lv_micropython_cmod>
+# usermod.cmake also accepts a semicolon-separated list of module paths if you
+# want this module plus others — no aggregator file required, e.g.:
+#     -DUSER_C_MODULES="<path to lv_micropython_cmod>;<path to other_mod>"
 
 set(LVMP_DIR ${CMAKE_CURRENT_LIST_DIR})
 get_filename_component(WORKSPACE_DIR ${LVMP_DIR} DIRECTORY)

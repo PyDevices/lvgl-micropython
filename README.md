@@ -13,8 +13,6 @@ workspace/
   micropython/             ← for builds
 ```
 
-Or clone into [cmods](https://github.com/PyDevices/cmods) when using the optional MP wrapper.
-
 ## Generate bindings
 
 ```bash
@@ -24,9 +22,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./regenerate_lvmp.sh
 ```
 
-## Build (direct)
+## Build (Make ports)
 
-From a MicroPython port directory, set `USER_C_MODULES` to the **workspace root** (parent of this repo):
+`USER_C_MODULES` is the **workspace parent** (directory containing this repo and any other `*/micropython.mk` siblings):
 
 ```bash
 cd micropython/ports/unix
@@ -39,18 +37,26 @@ Override bindings location if needed:
 make USER_C_MODULES=../../.. BINDINGS_DIR=/path/to/lv_bindings
 ```
 
-## Build (cmods wrapper)
+## Build (CMake ports)
+
+`USER_C_MODULES` points at **this repo** (or `lv_micropython_cmod/micropython.cmake`). CMake does not scan the workspace for siblings:
 
 ```bash
-git clone https://github.com/PyDevices/cmods.git
-cd cmods
-git clone https://github.com/micropython/micropython.git micropython
-git clone https://github.com/PyDevices/lv_micropython_cmod.git lv_micropython_cmod
-git clone https://github.com/PyDevices/lv_bindings.git lv_bindings
-cd micropython && git submodule update --init --recursive && cd ..
-./lv_bindings/regenerate_lvmp.sh
-./build_unix.sh
+cd micropython/ports/esp32
+make BOARD=ESP32_GENERIC_S3 USER_C_MODULES=../../../lv_micropython_cmod
+
+cd micropython/ports/rp2
+make BOARD=RPI_PICO USER_C_MODULES=../../../lv_micropython_cmod
 ```
+
+To include this module **plus** other usermods, pass a semicolon-separated list (no aggregator file required):
+
+```bash
+make BOARD=ESP32_GENERIC_S3 \
+  USER_C_MODULES="/abs/path/to/lv_micropython_cmod;/abs/path/to/displayif"
+```
+
+([cmods](https://github.com/PyDevices/cmods) is an optional convenience workspace with `./build_mp.sh`; it is not required.)
 
 ## Smoke test
 
@@ -62,8 +68,8 @@ cd micropython && git submodule update --init --recursive && cd ..
 
 | Path | Role |
 |------|------|
-| `micropython.mk` | Unix/Make ports |
-| `micropython.cmake` | ESP32/RP2 CMake ports (via cmods `micropython.cmake`) |
+| `micropython.mk` | Make ports — `USER_C_MODULES` = workspace parent |
+| `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
 | `lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
 | `test_lvgl_unix.py` | Headless unix smoke test |

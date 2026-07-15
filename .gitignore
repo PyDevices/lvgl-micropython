@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Cursor IDE throwaways (do not ignore the whole .cursor/ tree)
+.cursor/debug*
+.cursor/plans/

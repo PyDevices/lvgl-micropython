@@ -14,7 +14,15 @@ if(NOT DEFINED BINDINGS_DIR)
 endif()
 set(LVMP_C ${BINDINGS_DIR}/generated/lvgl_micropython.c)
 set(LVGL_DIR ${BINDINGS_DIR}/lvgl)
-file(GLOB_RECURSE SOURCES ${LVGL_DIR}/src/*.c ${LVMP_DIR}/lv_mem_core_micropython.c)
+file(GLOB_RECURSE SOURCES ${LVGL_DIR}/src/*.c)
+
+# LVGL is available on every port, but its desktop/host-GUI and OS-specific
+# driver backends plus the OpenGLES draw unit need host libraries and break the
+# build. CMake ports here (esp32/rp2) are embedded, so drop those backends. This
+# exclusion lives in the module's own config, not in the build tool.
+list(FILTER SOURCES EXCLUDE REGEX "/src/drivers/(opengles|sdl|glfw|x11|wayland|evdev|libinput|qnx|uefi|nuttx|windows)/")
+list(FILTER SOURCES EXCLUDE REGEX "/src/draw/opengles/")
+list(APPEND SOURCES ${LVMP_DIR}/lv_mem_core_micropython.c)
 
 if(NOT EXISTS ${LVMP_C})
     message(FATAL_ERROR "${LVMP_C} not found. Run ${BINDINGS_DIR}/regenerate_lvmp.sh after changing lvgl, lv_conf.h, or binding/")

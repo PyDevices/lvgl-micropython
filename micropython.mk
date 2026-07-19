@@ -9,6 +9,32 @@ BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lv_bindings)
 LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")
+
+# LVGL is available on every port, but its desktop/host-GUI and OS-specific
+# driver backends (OpenGL/SDL/GLFW/X11/Wayland/evdev/libinput/qnx/uefi/nuttx/
+# windows) plus the OpenGLES draw unit need host libraries and break cross
+# builds (e.g. lv_opengles_shader.c fails -Werror). This exclusion lives in the
+# module's own config: only desktop ports (unix/webassembly/windows) keep the
+# full source sweep; every other (embedded) port drops these backends.
+LVMP_PORT_DIR := $(abspath $(CURDIR))
+LVMP_IS_DESKTOP := $(findstring /ports/unix,$(LVMP_PORT_DIR))$(findstring /ports/webassembly,$(LVMP_PORT_DIR))$(findstring /ports/windows,$(LVMP_PORT_DIR))
+ifeq ($(LVMP_IS_DESKTOP),)
+LVMP_EXCLUDE_DIRS := \
+    $(LVGL_DIR)/src/drivers/opengles \
+    $(LVGL_DIR)/src/drivers/sdl \
+    $(LVGL_DIR)/src/drivers/glfw \
+    $(LVGL_DIR)/src/drivers/x11 \
+    $(LVGL_DIR)/src/drivers/wayland \
+    $(LVGL_DIR)/src/drivers/evdev \
+    $(LVGL_DIR)/src/drivers/libinput \
+    $(LVGL_DIR)/src/drivers/qnx \
+    $(LVGL_DIR)/src/drivers/uefi \
+    $(LVGL_DIR)/src/drivers/nuttx \
+    $(LVGL_DIR)/src/drivers/windows \
+    $(LVGL_DIR)/src/draw/opengles
+SOURCES := $(foreach s,$(SOURCES),$(if $(strip $(foreach d,$(LVMP_EXCLUDE_DIRS),$(findstring $(d)/,$(s)))),,$(s)))
+endif
+
 SOURCES += $(LVMP_DIR)/lv_mem_core_micropython.c
 
 $(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Run $(BINDINGS_DIR)/regenerate_lvmp.sh after changing lvgl, lv_conf.h, or binding/))

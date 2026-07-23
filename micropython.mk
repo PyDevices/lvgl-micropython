@@ -31,7 +31,8 @@ LVMP_EXCLUDE_DIRS := \
     $(LVGL_DIR)/src/drivers/uefi \
     $(LVGL_DIR)/src/drivers/nuttx \
     $(LVGL_DIR)/src/drivers/windows \
-    $(LVGL_DIR)/src/draw/opengles
+    $(LVGL_DIR)/src/draw/opengles \
+    $(LVGL_DIR)/src/libs/gltf
 SOURCES := $(foreach s,$(SOURCES),$(if $(strip $(foreach d,$(LVMP_EXCLUDE_DIRS),$(findstring $(d)/,$(s)))),,$(s)))
 endif
 

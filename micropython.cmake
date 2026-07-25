@@ -35,5 +35,10 @@ target_link_libraries(usermod INTERFACE lv_micropython)
 
 add_library(lvgl INTERFACE)
 target_sources(lvgl INTERFACE ${SOURCES})
-target_compile_options(lvgl INTERFACE -Wno-unused-function)
+# Match micropython.mk / CircuitPython: LV_USE_FLOAT upstream trips -Werror=float.
+target_compile_options(lvgl INTERFACE
+    -Wno-unused-function
+    -Wno-double-promotion
+    -Wno-float-conversion
+)
 target_link_libraries(lv_micropython INTERFACE lvgl)

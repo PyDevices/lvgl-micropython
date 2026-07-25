@@ -45,3 +45,12 @@ $(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Run $(BINDINGS_DIR)/reg
 CFLAGS_USERMOD += -I$(BINDINGS_DIR) -I$(LVMP_DIR) -Wno-unused-function
 SRC_USERMOD_LIB_C += $(SOURCES)
 SRC_USERMOD_C += $(LVMP_C)
+
+# With LV_USE_FLOAT=1, upstream LVGL trips -Werror=double-promotion / float-conversion.
+# Port Makefiles (unix/webassembly) append -Wdouble-promotion after CFLAGS_USERMOD,
+# so put the suppress on the LVGL object rules (same idea as circuitpython.mk).
+LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion
+$(foreach s,$(SOURCES),\
+	$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(s:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS)))
+$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(LVMP_C:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS))
+$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(LVMP_DIR)/lv_mem_core_micropython.o): CFLAGS += $(LVMP_FLOAT_CFLAGS))

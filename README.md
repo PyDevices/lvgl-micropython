@@ -4,6 +4,10 @@ MicroPython user C module glue for LVGL: `micropython.mk`, CMake usermod, GC-awa
 
 Requires a sibling clone of [lv_bindings](https://github.com/PyDevices/lv_bindings) with `generated/lvgl_micropython.c` (run `regenerate_lvmp.sh`).
 
+## Documentation
+
+See [docs/](docs/index.md).
+
 ## Workspace layout
 
 ```
@@ -61,10 +65,10 @@ make BOARD=ESP32_GENERIC_S3 \
 ## Smoke test
 
 ```bash
-./micropython/ports/unix/build-standard/micropython ./lv_micropython_cmod/tests/test_lvgl_unix.py
+./micropython/ports/unix/build-standard/micropython ./lv_micropython_cmod/tools/test_lvgl_unix.py
 ```
 
-Prefer the unified smoke test directly: `lv_bindings/test_lvgl_smoke.py`.
+Prefer the unified smoke test directly: `lv_bindings/tools/test_lvgl_smoke.py`.
 
 ## Files
 
@@ -74,6 +78,6 @@ Prefer the unified smoke test directly: `lv_bindings/test_lvgl_smoke.py`.
 | `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
-| `tests/test_lvgl_unix.py` | Deprecated wrapper → `lv_bindings/test_lvgl_smoke.py` |
+| `tools/test_lvgl_unix.py` | Deprecated wrapper → `lv_bindings/tools/test_lvgl_smoke.py` |
 
 CircuitPython integration lives in [lv_circuitpython_mod](https://github.com/PyDevices/lv_circuitpython_mod).

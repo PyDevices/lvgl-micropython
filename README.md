@@ -32,6 +32,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ```bash
 cd micropython/ports/unix
+# Prefer the cmods workspace `./build_mp.sh` (merges this manifest + upstream).
+# Standalone: point FROZEN_MANIFEST at a wrapper that include()s this file and
+# the port/variant manifest, or use cmods/manifest.py with FROZEN_MANIFEST_UPSTREAM set.
 make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lv_micropython_cmod/manifest.py
 ```
 
@@ -77,7 +80,9 @@ Prefer the unified smoke test directly: `lv_bindings/tools/test_lvgl_smoke.py`.
 | `micropython.mk` | Make ports — `USER_C_MODULES` = workspace parent |
 | `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
-| `manifest.py` | Optional frozen Python modules |
+| `manifest.py` | Freezes `lib/display_driver.py` (sync from lv_bindings) |
+| `lib/display_driver.py` | Vendored pydisplay LVGL glue (`import display_driver`) |
+| `scripts/sync_from_lv_bindings.sh` | Refresh `lib/display_driver.py` from lv_bindings |
 | `tools/test_lvgl_unix.py` | Deprecated wrapper → `lv_bindings/tools/test_lvgl_smoke.py` |
 
 CircuitPython integration lives in [lv_circuitpython_mod](https://github.com/PyDevices/lv_circuitpython_mod).

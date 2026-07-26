@@ -61,8 +61,10 @@ make BOARD=ESP32_GENERIC_S3 \
 ## Smoke test
 
 ```bash
-./micropython/ports/unix/build-standard/micropython ./lv_micropython_cmod/test_lvgl_unix.py
+./micropython/ports/unix/build-standard/micropython ./lv_micropython_cmod/tests/test_lvgl_unix.py
 ```
+
+Prefer the unified smoke test directly: `lv_bindings/test_lvgl_smoke.py`.
 
 ## Files
 
@@ -70,8 +72,8 @@ make BOARD=ESP32_GENERIC_S3 \
 |------|------|
 | `micropython.mk` | Make ports — `USER_C_MODULES` = workspace parent |
 | `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
-| `lv_mem_core_micropython.c` | GC-aware LVGL allocator |
+| `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
-| `test_lvgl_unix.py` | Headless unix smoke test |
+| `tests/test_lvgl_unix.py` | Deprecated wrapper → `lv_bindings/test_lvgl_smoke.py` |
 
 CircuitPython integration lives in [lv_circuitpython_mod](https://github.com/PyDevices/lv_circuitpython_mod).

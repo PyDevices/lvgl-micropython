@@ -36,7 +36,7 @@ LVMP_EXCLUDE_DIRS := \
 SOURCES := $(foreach s,$(SOURCES),$(if $(strip $(foreach d,$(LVMP_EXCLUDE_DIRS),$(findstring $(d)/,$(s)))),,$(s)))
 endif
 
-SOURCES += $(LVMP_DIR)/lv_mem_core_micropython.c
+SOURCES += $(LVMP_DIR)/src/lv_mem_core_micropython.c
 
 $(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Run $(BINDINGS_DIR)/regenerate_lvmp.sh after changing lvgl, lv_conf.h, or binding/))
 
@@ -53,4 +53,4 @@ LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion
 $(foreach s,$(SOURCES),\
 	$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(s:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS)))
 $(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(LVMP_C:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS))
-$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(LVMP_DIR)/lv_mem_core_micropython.o): CFLAGS += $(LVMP_FLOAT_CFLAGS))
+$(eval $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(LVMP_DIR)/src/lv_mem_core_micropython.o): CFLAGS += $(LVMP_FLOAT_CFLAGS))

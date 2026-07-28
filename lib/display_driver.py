@@ -74,7 +74,13 @@ def _asyncio_loop_running():
             return True
         except RuntimeError:
             return False
-    return False
+    # MicroPython uasyncio: no get_running_loop; get_event_loop() still works
+    # while a task is executing (PyScript gallery import path).
+    try:
+        asyncio.get_event_loop()
+        return True
+    except (AttributeError, RuntimeError):
+        return False
 
 
 class event_loop:
@@ -200,6 +206,11 @@ class event_loop:
             self._pause -= 1
         if self._pause == 0:
             self._arm_sync_timer()
+            # Async path: arm refresh task + timer_cb if import-time construction
+            # could not (MicroPython lacks get_running_loop; UI builders that
+            # disable()/enable() around layout also land here).
+            if self.asynchronous and not self._async_armed and _asyncio_loop_running():
+                self.arm()
 
     @staticmethod
     def is_running():

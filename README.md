@@ -8,6 +8,8 @@ Requires a sibling clone of [lv_bindings](https://github.com/PyDevices/lv_bindin
 
 See [docs/](docs/index.md).
 
+This repo is mostly glue: it wires LVGL into MicroPython builds and exposes the runtime hooks that the firmware needs. In practice, you usually change the build glue or allocator here when the port itself changes, but you do not regenerate the bindings here. If the binding layer changed, update **`lv_bindings`** first and then rebuild this module against the new generated file.
+
 ## Workspace layout
 
 ```

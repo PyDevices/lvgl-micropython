@@ -25,10 +25,12 @@ changes kept intentionally small:
   ``import display_driver`` is safe before any event loop exists.
 * No app-loop helper — LVGL apps call ``runtime.run_forever()``.
 
-Interactive desktop (librt + REPL): LVGL task handling is paced at ~30 ms with
-a wall-clock gate. The Runtime timer stays at 10 ms; a host-pump subscription
-drains SDL/keys every tick so the window cannot stall while LVGL is paused or
-slow.
+Interactive desktop (librt + REPL): ``task_handler`` / indev reads are paced at
+``LVGL_PERIOD_MS`` (10 ms) with a wall-clock gate. Display refresh stays at
+LVGL's ``LV_DEF_REFR_PERIOD`` (~33 ms). PARTIAL ``show()`` is gated to that
+refresh cadence so presents do not track the faster task loop. The Runtime
+timer stays at 10 ms; a host-pump subscription drains SDL/keys every tick so
+the window cannot stall while LVGL is paused or slow.
 """
 
 import gc
@@ -58,10 +60,13 @@ except ImportError:
 
 asyncio_available = asyncio is not None
 
-LVGL_PERIOD_MS = 30
+LVGL_PERIOD_MS = 10
+# Match LV_DEF_REFR_PERIOD in lv_conf.h — PARTIAL present cadence / display refresh.
+LVGL_REFR_PERIOD_MS = 33
 _driver_ref = None  # primary DisplayDriver (compat)
 _drivers = []  # all DisplayDriver instances
 _host_pump_sub = None
+_present_next_ok_ms = None
 
 
 def _asyncio_loop_running():
@@ -410,7 +415,17 @@ def _ensure_host_pump():
 
 
 def _present_lvgl_displays():
-    """Present PARTIAL panels after ``lv.task_handler`` (DIRECT shows in flush)."""
+    """Present PARTIAL panels after ``lv.task_handler`` (DIRECT shows in flush).
+
+    Gated to :data:`LVGL_REFR_PERIOD_MS` so a faster ``task_handler`` loop does
+    not present every tick. DIRECT / shared-FB paths present from flush instead.
+    """
+    global _present_next_ok_ms
+    if ticks_ms is not None and ticks_diff is not None and ticks_add is not None:
+        now = ticks_ms()
+        if _present_next_ok_ms is not None and ticks_diff(_present_next_ok_ms, now) > 0:
+            return
+        _present_next_ok_ms = ticks_add(now, LVGL_REFR_PERIOD_MS)
     for drv in _drivers:
         if getattr(drv, "_share_fb", False):
             continue
@@ -714,47 +729,175 @@ def _encoder_cb(event, indev, data):
         data.state = lv.INDEV_STATE.RELEASED
 
 
-def _lv_key_from_event(event):
-    """Map eventsys/SDL key codes to ``lv.KEY_*`` for the keypad indev.
+# US QWERTY unshifted → shifted printable (SDL often reports base key + KMOD_SHIFT).
+_SHIFT_MAP = {
+    ord("`"): ord("~"),
+    ord("1"): ord("!"),
+    ord("2"): ord("@"),
+    ord("3"): ord("#"),
+    ord("4"): ord("$"),
+    ord("5"): ord("%"),
+    ord("6"): ord("^"),
+    ord("7"): ord("&"),
+    ord("8"): ord("*"),
+    ord("9"): ord("("),
+    ord("0"): ord(")"),
+    ord("-"): ord("_"),
+    ord("="): ord("+"),
+    ord("["): ord("{"),
+    ord("]"): ord("}"),
+    ord("\\"): ord("|"),
+    ord(";"): ord(":"),
+    ord("'"): ord('"'),
+    ord(","): ord("<"),
+    ord("."): ord(">"),
+    ord("/"): ord("?"),
+}
 
-    LVGL keypad focus moves only on ``NEXT`` / ``PREV`` (see ``lv_indev``), so
-    arrows and Tab are mapped to those. Unmapped keys (including printable
-    characters) pass through unchanged for text widgets.
-    """
-    k = event.key
+
+def _modifier_bit(event):
+    """Return ``KMOD_*`` bit for a modifier key event, or 0."""
     Keys = eventsys.Keys
-    if k in (Keys.K_DOWN, Keys.K_RIGHT):
-        return lv.KEY.NEXT
-    if k in (Keys.K_UP, Keys.K_LEFT):
-        return lv.KEY.PREV
-    if k == Keys.K_TAB:
-        if getattr(event, "mod", 0) & Keys.KMOD_SHIFT:
-            return lv.KEY.PREV
-        return lv.KEY.NEXT
-    if k in (Keys.K_RETURN, Keys.K_KP_ENTER):
-        return lv.KEY.ENTER
-    if k == Keys.K_ESCAPE:
-        return lv.KEY.ESC
-    if k == Keys.K_BACKSPACE:
-        return lv.KEY.BACKSPACE
-    if k == Keys.K_DELETE:
-        return lv.KEY.DEL
-    if k == Keys.K_HOME:
-        return lv.KEY.HOME
-    if k == Keys.K_END:
-        return lv.KEY.END
+    k = event.key
+    name = getattr(event, "name", None) or ""
+    by_key = {
+        Keys.K_LSHIFT: Keys.KMOD_LSHIFT,
+        Keys.K_RSHIFT: Keys.KMOD_RSHIFT,
+        Keys.K_LCTRL: Keys.KMOD_LCTRL,
+        Keys.K_RCTRL: Keys.KMOD_RCTRL,
+        Keys.K_LALT: Keys.KMOD_LALT,
+        Keys.K_RALT: Keys.KMOD_RALT,
+        Keys.K_LGUI: Keys.KMOD_LGUI,
+        Keys.K_RGUI: Keys.KMOD_RGUI,
+    }
+    bit = by_key.get(k)
+    if bit:
+        return bit
+    by_name = {
+        "Left Shift": Keys.KMOD_LSHIFT,
+        "Right Shift": Keys.KMOD_RSHIFT,
+        "Left Ctrl": Keys.KMOD_LCTRL,
+        "Right Ctrl": Keys.KMOD_RCTRL,
+        "Left Alt": Keys.KMOD_LALT,
+        "Right Alt": Keys.KMOD_RALT,
+        "Left GUI": Keys.KMOD_LGUI,
+        "Right GUI": Keys.KMOD_RGUI,
+    }
+    return by_name.get(name, 0)
+
+
+def _apply_mods(k, mod):
+    """Apply Shift/Caps to a printable ASCII codepoint."""
+    Keys = eventsys.Keys
+    shift = bool(mod & Keys.KMOD_SHIFT)
+    caps = bool(mod & Keys.KMOD_CAPS)
+    if 97 <= k <= 122:  # a-z
+        if shift ^ caps:
+            return k - 32
+        return k
+    if 65 <= k <= 90:  # A-Z
+        if shift ^ caps:
+            return k
+        return k + 32
+    if shift and k in _SHIFT_MAP:
+        return _SHIFT_MAP[k]
     return k
 
 
-def _keypad_cb(event, indev, data):
-    if event is None:
-        return
-    if event.type == events.KEYDOWN:
-        data.state = lv.INDEV_STATE.PRESSED
-        data.key = _lv_key_from_event(event)
-    elif event.type == events.KEYUP:
-        data.state = lv.INDEV_STATE.RELEASED
-        data.key = _lv_key_from_event(event)
+def _lv_key_from_event(event, tracked_mods=0):
+    """Map eventsys/SDL key codes to ``lv.KEY_*`` / Unicode for the keypad indev.
+
+    Arrows become caret keys (``lv.KEY.LEFT``/…). Tab still moves group focus
+    (``NEXT`` / ``PREV``). Modifier keys are not returned — they corrupt text
+    widgets if inserted as huge SDLK values. Printable ASCII gets Shift/Caps
+    via ``event.mod`` and optional ``tracked_mods``.
+
+    Returns ``None`` for keys that must not update the LVGL keypad.
+    """
+    k = event.key
+    name = getattr(event, "name", None) or ""
+    Keys = eventsys.Keys
+    mod = (getattr(event, "mod", 0) or 0) | (tracked_mods or 0)
+
+    if _modifier_bit(event):
+        return None
+
+    # Scancode-derived SDLK → character / control (if a host skipped sdldisplay normalize).
+    if isinstance(k, int) and (k & 0x40000000) and name:
+        if len(name) == 1:
+            k = ord(name.lower())
+        elif name == "Space":
+            k = 32
+        elif name == "Return":
+            k = Keys.K_RETURN
+        elif name == "Backspace":
+            k = Keys.K_BACKSPACE
+        elif name == "Escape":
+            k = Keys.K_ESCAPE
+        elif name == "Tab":
+            k = Keys.K_TAB
+        elif name == "Delete":
+            k = Keys.K_DELETE
+
+    if k == Keys.K_TAB or name == "Tab":
+        if mod & Keys.KMOD_SHIFT:
+            return lv.KEY.PREV
+        return lv.KEY.NEXT
+    if k == Keys.K_RIGHT or name == "Right":
+        return lv.KEY.RIGHT
+    if k == Keys.K_LEFT or name == "Left":
+        return lv.KEY.LEFT
+    if k == Keys.K_DOWN or name == "Down":
+        return lv.KEY.DOWN
+    if k == Keys.K_UP or name == "Up":
+        return lv.KEY.UP
+    if k in (Keys.K_RETURN, Keys.K_KP_ENTER) or name == "Return":
+        return lv.KEY.ENTER
+    if k == Keys.K_ESCAPE or name == "Escape":
+        return lv.KEY.ESC
+    if k == Keys.K_BACKSPACE or name == "Backspace":
+        return lv.KEY.BACKSPACE
+    if k == Keys.K_DELETE or name == "Delete":
+        return lv.KEY.DEL
+    if k == Keys.K_HOME or name == "Home":
+        return lv.KEY.HOME
+    if k == Keys.K_END or name == "End":
+        return lv.KEY.END
+    if not isinstance(k, int) or not (32 <= k <= 126):
+        return None
+    return _apply_mods(k, mod)
+
+
+def _make_keypad_cb(device):
+    """Build a keypad event_cb that always writes press state (idle-safe)."""
+    st = getattr(device, "_lv_key", None)
+    if st is None:
+        st = {"key": 0, "pressed": False, "mods": 0}
+        device._lv_key = st
+    else:
+        st.setdefault("mods", 0)
+
+    def _keypad_cb(event, indev, data):
+        if event is not None:
+            bit = _modifier_bit(event)
+            if bit:
+                if event.type == events.KEYDOWN:
+                    st["mods"] |= bit
+                elif event.type == events.KEYUP:
+                    st["mods"] &= ~bit
+            else:
+                key = _lv_key_from_event(event, st["mods"])
+                if key is not None:
+                    if event.type == events.KEYDOWN:
+                        st["pressed"] = True
+                        st["key"] = key
+                    elif event.type == events.KEYUP:
+                        st["pressed"] = False
+                        st["key"] = key
+        data.state = lv.INDEV_STATE.PRESSED if st["pressed"] else lv.INDEV_STATE.RELEASED
+        data.key = st["key"]
+
+    return _keypad_cb
 
 
 def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
@@ -787,7 +930,7 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
                 device.subscribe(event_cb)
                 indev.set_type(lv.INDEV_TYPE.ENCODER)
             elif device.type == eventsys.KEYPAD:
-                event_cb = _keypad_cb
+                event_cb = _make_keypad_cb(device)
                 device.subscribe(event_cb)
                 indev.set_type(lv.INDEV_TYPE.KEYPAD)
 
@@ -802,6 +945,10 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
 
             indev.set_group(lv.group_get_default())
             indev.set_read_cb(_read_cb)
+            # Default indev timer uses LV_DEF_REFR_PERIOD (~33 ms); match task_handler.
+            read_timer = indev.get_read_timer()
+            if read_timer is not None:
+                read_timer.set_period(LVGL_PERIOD_MS)
         elif device.type == eventsys.HOST:
             wid = window_id
             if wid is None:

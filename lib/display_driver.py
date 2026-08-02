@@ -940,6 +940,11 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
             def _read_cb(indev_obj, data, _dev=device, _cb=event_cb):
                 _dev.poll(indev_obj, data)
                 _cb(None, indev_obj, data)
+                # Host backends drain native input in batches. Ask LVGL to call
+                # us again in this read cycle until the virtual-device FIFO is
+                # empty, preserving fast KEYDOWN/KEYUP sequences without adding
+                # one LVGL refresh period of latency per transition.
+                data.continue_reading = bool(getattr(_dev, "has_pending", False))
                 if _dev.type == eventsys.POINTER:
                     _gesture_feed(indev_obj, data, _dev)
 

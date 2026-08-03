@@ -1062,7 +1062,21 @@ class DisplayDriver:
             last = self.lv_display.flush_is_last()
         except Exception:
             last = True
-        if last:
+        synced = False
+        flush_rect = getattr(panel, "flush_rect", None)
+        if flush_rect is not None:
+            try:
+                synced = bool(
+                    flush_rect(
+                        area.x1,
+                        area.y1,
+                        area.x2 - area.x1 + 1,
+                        area.y2 - area.y1 + 1,
+                    )
+                )
+            except Exception:
+                synced = False
+        if last and not synced:
             try:
                 panel.show()
             except Exception:

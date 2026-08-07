@@ -51,9 +51,10 @@ import eventsys
 from eventsys import events
 
 try:
-    from multimer import asyncio, ticks_add, ticks_diff, ticks_ms
+    from multimer import asyncio, loop_running, ticks_add, ticks_diff, ticks_ms
 except ImportError:
     asyncio = None
+    loop_running = None
     ticks_add = None
     ticks_diff = None
     ticks_ms = None
@@ -71,21 +72,9 @@ _present_next_ok_ms = None
 
 def _asyncio_loop_running():
     """True when an asyncio loop is already running (host loop or inside a task)."""
-    if asyncio is None:
+    if loop_running is None:
         return False
-    if hasattr(asyncio, "get_running_loop"):
-        try:
-            asyncio.get_running_loop()
-            return True
-        except RuntimeError:
-            return False
-    # MicroPython uasyncio: no get_running_loop; get_event_loop() still works
-    # while a task is executing (PyScript gallery import path).
-    try:
-        asyncio.get_event_loop()
-        return True
-    except (AttributeError, RuntimeError):
-        return False
+    return loop_running()
 
 
 class event_loop:
@@ -404,14 +393,28 @@ def _ensure_host_pump():
         return
     if _host_pump_sub is not None and runtime._timer is not None:
         return
-    _host_pump_sub = None
+    if _host_pump_sub is not None:
+        # Either stop_timer() dropped every subscription, or the timer is an
+        # AsyncTimer still waiting for its loop. Drop our callback in the second
+        # case so re-subscribing cannot pump the host twice per tick.
+        try:
+            _host_pump_sub.deinit()
+        except Exception:
+            pass
+        _host_pump_sub = None
 
     def _host_pump(_t):
         for drv in _drivers:
             for vd in getattr(drv, "virtual_devices", ()):
                 vd.poll_host_device()
 
-    _host_pump_sub = runtime.on_tick(_host_pump, period=10, async_=False)
+    # Follow the runtime's timer mode. Forcing async_=False would create the
+    # shared *sync* timer whenever the pump subscribes first — which is what a
+    # module-scope ``import display_driver`` does under timer_async, locking the
+    # app out of AsyncTimer for the rest of the run.
+    _host_pump_sub = runtime.on_tick(
+        _host_pump, period=10, async_=runtime.timer_async
+    )
 
 
 def _present_lvgl_displays():
@@ -1103,3 +1106,5 @@ class DisplayDriver:
 
 # Import-time bootstrap (same as before the probe split).
 main()
+
+# org-secret smoke check 2026-08-02T11:08Z

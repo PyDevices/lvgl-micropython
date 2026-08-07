@@ -36,9 +36,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ```bash
 cd micropython/ports/unix
-# Prefer the cmods workspace `./build_mp.sh` (merges this manifest + upstream).
-# Standalone: point FROZEN_MANIFEST at a wrapper that include()s this file and
-# the port/variant manifest, or use cmods/manifest.py with FROZEN_MANIFEST_UPSTREAM set.
+# Optional: freeze display_driver.py from this repo. To also keep the port's
+# default frozen modules, write a small wrapper that include()s this manifest
+# and the port/variant manifest.py.
 make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lv_micropython_cmod/manifest.py
 ```
 
@@ -67,7 +67,7 @@ make BOARD=ESP32_GENERIC_S3 \
   USER_C_MODULES="/abs/path/to/lv_micropython_cmod;/abs/path/to/displayif"
 ```
 
-([cmods](https://github.com/PyDevices/cmods) is an optional convenience workspace with `./build_mp.sh`; it is not required.)
+See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
 
 ## Smoke test
 

@@ -3,7 +3,7 @@
 # Sync: ./scripts/sync_from_lv_bindings.sh
 #
 # This file only freezes usermod helpers. Upstream port/board/variant frozen
-# modules come from the workspace manifest (cmods/manifest.py) or from
+# modules come from a workspace aggregator manifest or from
 # FROZEN_MANIFEST_UPSTREAM when you wrap this file yourself.
 
 module("display_driver.py", base_path="./lib", opt=3)

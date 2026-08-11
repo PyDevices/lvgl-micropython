@@ -443,13 +443,13 @@ def _present_lvgl_displays():
 
 
 def attach(display, devices=None, *, color_format=None, blocking=True):
-    """Attach an additional displaysys panel as an LVGL display.
+    """Attach an additional displaydev panel as an LVGL display.
 
     Call after ``import display_driver`` (primary already wired) and after
     ``runtime.add_display(display)``.
 
     Args:
-        display: Secondary displaysys driver.
+        display: Secondary displaydev driver.
         devices: Optional eventsys devices to bind as indevs on this display.
             When omitted and ``runtime.host_dev`` exists, that host device is
             reused (window-filtered) so the secondary panel receives pointer
@@ -968,7 +968,7 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
 
 
 class DisplayDriver:
-    """Bridge a displaysys driver to an LVGL display + input devices.
+    """Bridge a displaydev driver to an LVGL display + input devices.
 
     Creates the LVGL display, chooses DIRECT (shared framebuffer) or PARTIAL
     render mode, installs flush callbacks, and wires eventsys devices via
@@ -985,7 +985,7 @@ class DisplayDriver:
         """Create LVGL display buffers and register input devices.
 
         Args:
-            display_drv: displaysys driver (BusDisplay, SDLDisplay, FBDisplay, …).
+            display_drv: displaydev driver (BusDisplay, SDLDisplay, FBDisplay, …).
             devs: Iterable of eventsys devices to register as LVGL indevs.
             color_format: LVGL color format (default RGB565).
             blocking: When False, register a bus flush-ready callback for async blit.

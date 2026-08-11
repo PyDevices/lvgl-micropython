@@ -48,7 +48,8 @@ if runtime is not None:
 import lvgl as lv
 
 import eventsys
-from eventsys import events
+import events
+import keys
 
 try:
     from multimer import asyncio, loop_running, ticks_add, ticks_diff, ticks_ms
@@ -760,40 +761,38 @@ _SHIFT_MAP = {
 
 def _modifier_bit(event):
     """Return ``KMOD_*`` bit for a modifier key event, or 0."""
-    Keys = eventsys.Keys
     k = event.key
     name = getattr(event, "name", None) or ""
     by_key = {
-        Keys.K_LSHIFT: Keys.KMOD_LSHIFT,
-        Keys.K_RSHIFT: Keys.KMOD_RSHIFT,
-        Keys.K_LCTRL: Keys.KMOD_LCTRL,
-        Keys.K_RCTRL: Keys.KMOD_RCTRL,
-        Keys.K_LALT: Keys.KMOD_LALT,
-        Keys.K_RALT: Keys.KMOD_RALT,
-        Keys.K_LGUI: Keys.KMOD_LGUI,
-        Keys.K_RGUI: Keys.KMOD_RGUI,
+        keys.K_LSHIFT: keys.KMOD_LSHIFT,
+        keys.K_RSHIFT: keys.KMOD_RSHIFT,
+        keys.K_LCTRL: keys.KMOD_LCTRL,
+        keys.K_RCTRL: keys.KMOD_RCTRL,
+        keys.K_LALT: keys.KMOD_LALT,
+        keys.K_RALT: keys.KMOD_RALT,
+        keys.K_LGUI: keys.KMOD_LGUI,
+        keys.K_RGUI: keys.KMOD_RGUI,
     }
     bit = by_key.get(k)
     if bit:
         return bit
     by_name = {
-        "Left Shift": Keys.KMOD_LSHIFT,
-        "Right Shift": Keys.KMOD_RSHIFT,
-        "Left Ctrl": Keys.KMOD_LCTRL,
-        "Right Ctrl": Keys.KMOD_RCTRL,
-        "Left Alt": Keys.KMOD_LALT,
-        "Right Alt": Keys.KMOD_RALT,
-        "Left GUI": Keys.KMOD_LGUI,
-        "Right GUI": Keys.KMOD_RGUI,
+        "Left Shift": keys.KMOD_LSHIFT,
+        "Right Shift": keys.KMOD_RSHIFT,
+        "Left Ctrl": keys.KMOD_LCTRL,
+        "Right Ctrl": keys.KMOD_RCTRL,
+        "Left Alt": keys.KMOD_LALT,
+        "Right Alt": keys.KMOD_RALT,
+        "Left GUI": keys.KMOD_LGUI,
+        "Right GUI": keys.KMOD_RGUI,
     }
     return by_name.get(name, 0)
 
 
 def _apply_mods(k, mod):
     """Apply Shift/Caps to a printable ASCII codepoint."""
-    Keys = eventsys.Keys
-    shift = bool(mod & Keys.KMOD_SHIFT)
-    caps = bool(mod & Keys.KMOD_CAPS)
+    shift = bool(mod & keys.KMOD_SHIFT)
+    caps = bool(mod & keys.KMOD_CAPS)
     if 97 <= k <= 122:  # a-z
         if shift ^ caps:
             return k - 32
@@ -819,7 +818,6 @@ def _lv_key_from_event(event, tracked_mods=0):
     """
     k = event.key
     name = getattr(event, "name", None) or ""
-    Keys = eventsys.Keys
     mod = (getattr(event, "mod", 0) or 0) | (tracked_mods or 0)
 
     if _modifier_bit(event):
@@ -832,39 +830,39 @@ def _lv_key_from_event(event, tracked_mods=0):
         elif name == "Space":
             k = 32
         elif name == "Return":
-            k = Keys.K_RETURN
+            k = keys.K_RETURN
         elif name == "Backspace":
-            k = Keys.K_BACKSPACE
+            k = keys.K_BACKSPACE
         elif name == "Escape":
-            k = Keys.K_ESCAPE
+            k = keys.K_ESCAPE
         elif name == "Tab":
-            k = Keys.K_TAB
+            k = keys.K_TAB
         elif name == "Delete":
-            k = Keys.K_DELETE
+            k = keys.K_DELETE
 
-    if k == Keys.K_TAB or name == "Tab":
-        if mod & Keys.KMOD_SHIFT:
+    if k == keys.K_TAB or name == "Tab":
+        if mod & keys.KMOD_SHIFT:
             return lv.KEY.PREV
         return lv.KEY.NEXT
-    if k == Keys.K_RIGHT or name == "Right":
+    if k == keys.K_RIGHT or name == "Right":
         return lv.KEY.RIGHT
-    if k == Keys.K_LEFT or name == "Left":
+    if k == keys.K_LEFT or name == "Left":
         return lv.KEY.LEFT
-    if k == Keys.K_DOWN or name == "Down":
+    if k == keys.K_DOWN or name == "Down":
         return lv.KEY.DOWN
-    if k == Keys.K_UP or name == "Up":
+    if k == keys.K_UP or name == "Up":
         return lv.KEY.UP
-    if k in (Keys.K_RETURN, Keys.K_KP_ENTER) or name == "Return":
+    if k in (keys.K_RETURN, keys.K_KP_ENTER) or name == "Return":
         return lv.KEY.ENTER
-    if k == Keys.K_ESCAPE or name == "Escape":
+    if k == keys.K_ESCAPE or name == "Escape":
         return lv.KEY.ESC
-    if k == Keys.K_BACKSPACE or name == "Backspace":
+    if k == keys.K_BACKSPACE or name == "Backspace":
         return lv.KEY.BACKSPACE
-    if k == Keys.K_DELETE or name == "Delete":
+    if k == keys.K_DELETE or name == "Delete":
         return lv.KEY.DEL
-    if k == Keys.K_HOME or name == "Home":
+    if k == keys.K_HOME or name == "Home":
         return lv.KEY.HOME
-    if k == Keys.K_END or name == "End":
+    if k == keys.K_END or name == "End":
         return lv.KEY.END
     if not isinstance(k, int) or not (32 <= k <= 126):
         return None

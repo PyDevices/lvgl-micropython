@@ -560,6 +560,7 @@ class LVGLRuntime:
         self._quit_requested = False
         self._exit_code = None
         self._blocking = False
+        self._blocking_run_forever = False
         self._before_quit = None
         self._teardown_timer = None
         self._teardown_done = False
@@ -741,6 +742,7 @@ class LVGLRuntime:
             raise RuntimeError("asyncio is not available")
         self._arm_async()
         self._blocking = True
+        self._blocking_run_forever = True  # harness / eventsys duck-typing parity
         try:
             while not self._quit_requested:
                 await asyncio.sleep(tick_ms / 1000)
@@ -752,6 +754,7 @@ class LVGLRuntime:
                     pass
         finally:
             self._blocking = False
+            self._blocking_run_forever = False
             self._perform_teardown()
         self._raise_exit_code()
 
@@ -770,11 +773,13 @@ class LVGLRuntime:
         if _interactive_session() and multimer.uses_signals():
             return
         self._blocking = True
+        self._blocking_run_forever = True  # harness / eventsys duck-typing parity
         try:
             while not self._quit_requested:
                 multimer.sleep_ms(tick_ms)
         finally:
             self._blocking = False
+            self._blocking_run_forever = False
             self._perform_teardown()
         self._raise_exit_code()
 

@@ -4,20 +4,21 @@
 # SPDX-License-Identifier: MIT
 
 """
-display_driver.py - LVGL display/input wiring and event loop for pydisplay.
+display_driver.py - LVGL displaydev/input wiring and event loop for PyDevices.
 
 Canonical copy lives in PyDevices/lvgl-bindings (``python/display_driver.py``).
 Consumer repos (lvgl-micropython, lvgl-circuitpython, lvgl-python)
 vendor a synced copy; do not edit those copies directly.
 
-Requires a valid board_config.py on the path (pydisplay). Importing this module
-initializes LVGL, starts the shared ``event_loop`` (tick via ``runtime.on_tick``),
-and registers display flush + input devices.
+Requires a valid ``board_config.py`` on the path. Importing this module creates
+an LVGL-owned runtime, starts ``event_loop``, and registers display flush and
+input devices. It intentionally does not depend on the optional ``eventsys``
+application traffic controller.
 
 ``event_loop`` was adapted from upstream lv_utils (Amir Gonnen). Integration
 changes kept intentionally small:
 
-* Periodic tick from ``eventsys.Runtime.on_tick`` instead of ``machine.Timer``.
+* Periodic tick from the local LVGL runtime instead of ``machine.Timer``.
 * ``asyncio`` from ``multimer``.
 * Sync path runs ``lv.task_handler()`` from the tick callback (re-entrancy
   guarded); the runtime timer already delivers on the main thread.
@@ -36,18 +37,12 @@ the window cannot stall while LVGL is paused or slow.
 import gc
 import sys
 
-from board_config import display_drv, runtime
+import board_config
 
-# board_config.Runtime arms machine.Timer immediately. Halt it before any
-# LVGL import/init: a soft-timer callback during lv_init / module load has
-# corrupted draw_buf handlers on ESP32-P4 (Illegal instruction in
-# width_to_stride). main() re-arms after DisplayDriver exists.
-if runtime is not None:
-    runtime.stop_timer()
+display_drv = board_config.display_drv
 
 import lvgl as lv
 
-import eventsys
 import events
 import keys
 
@@ -70,6 +65,788 @@ _drivers = []  # all DisplayDriver instances
 _host_pump_sub = None
 _present_next_ok_ms = None
 
+# Local input types. Values intentionally match LVGL's historical PyDevices
+# bridge values so diagnostic code can inspect ``device.type`` without
+# importing the optional eventsys package.
+HOST = 0x01
+POINTER = 0x02
+ENCODER = 0x03
+KEYPAD = 0x04
+
+
+class InputDevice:
+    """Small input adapter used only by the LVGL bridge."""
+
+    type = -1
+    responses = events.filter
+
+    def __init__(self, read=None, data=None, read2=None, data2=None):
+        self._read = read if read is not None else lambda: None
+        self._data = data
+        self._read2 = read2 if read2 is not None else lambda: None
+        self._data2 = data2
+        self._state = None
+        self._runtime = None
+        self._user_data = None
+        self._callbacks = []
+
+    @property
+    def runtime(self):
+        return self._runtime
+
+    @runtime.setter
+    def runtime(self, value):
+        self._runtime = value
+
+    @property
+    def user_data(self):
+        return self._user_data
+
+    @user_data.setter
+    def user_data(self, value):
+        self._user_data = value
+
+    def subscribe(self, callback, event_types=None):
+        if not callable(callback):
+            raise ValueError("callback is not callable")
+        item = (callback, event_types)
+        if item not in self._callbacks:
+            self._callbacks.append(item)
+
+    def unsubscribe(self, callback, event_types=None):
+        self._callbacks = [item for item in self._callbacks if item[0] is not callback]
+
+    def poll(self, *args):
+        raw = self._poll()
+        if raw is None:
+            return []
+        result = raw if isinstance(raw, list) else [raw]
+        result = [event for event in result if event.type in events.filter]
+        for event in result:
+            if self._runtime is not None:
+                self._runtime._dispatch_event(event, self)
+            for callback, event_types in tuple(self._callbacks):
+                if event_types is None or event.type in event_types:
+                    callback(event, *args)
+        return result
+
+
+class HostInput(InputDevice):
+    """Adapt a host display's ``get_events`` callback for LVGL."""
+
+    type = HOST
+
+    def __init__(self, host_read, display=None, event_filter=None):
+        super().__init__(read=host_read, data=display, data2=event_filter or events.filter)
+        self.scale = getattr(display, "touch_scale", 1) if display is not None else 1
+        self._quit_chord_ok = hasattr(display, "quit_chord")
+
+    def _touch_scale_for(self, window_id):
+        panel = self._data
+        if window_id is not None and self._runtime is not None:
+            for candidate in self._runtime.displays:
+                if getattr(candidate, "_window_id", None) == window_id:
+                    panel = candidate
+                    break
+        scale = getattr(panel, "touch_scale", None) if panel is not None else None
+        if scale is None:
+            return self.scale
+        self.scale = scale
+        return scale
+
+    def _poll(self):
+        incoming = self._read()
+        if incoming is None:
+            return None
+        result = []
+        quit_chord = self._data.quit_chord if self._quit_chord_ok else None
+        chord_key = quit_chord[0] if quit_chord else None
+        for event in incoming:
+            if event.type == events.KEYDOWN and keys.chord_matches(
+                quit_chord, event.key, event.mod
+            ):
+                event = events.Quit(events.QUIT)
+            elif event.type == events.KEYUP and quit_chord and event.key == chord_key:
+                continue
+            if event.type not in self._data2:
+                continue
+            if event.type in (
+                events.MOUSEMOTION,
+                events.MOUSEBUTTONDOWN,
+                events.MOUSEBUTTONUP,
+            ):
+                scale = self._touch_scale_for(getattr(event, "window", None))
+                if scale and scale != 1:
+                    pos = (int(event.pos[0] // scale), int(event.pos[1] // scale))
+                    if event.type == events.MOUSEMOTION:
+                        event = events.Motion(
+                            event.type,
+                            pos,
+                            (event.rel[0] // scale, event.rel[1] // scale),
+                            event.buttons,
+                            event.touch,
+                            event.window,
+                        )
+                    else:
+                        event = events.Button(
+                            event.type, pos, event.button, event.touch, event.window
+                        )
+            result.append(event)
+        return result or None
+
+
+_DEFAULT_TOUCH_ROTATION_TABLE = (0b000, 0b101, 0b110, 0b011)
+_SWAP_XY = 0b001
+_REVERSE_X = 0b010
+_REVERSE_Y = 0b100
+
+
+def _normalize_points(sample):
+    if not sample:
+        return ()
+    if isinstance(sample[0], int):
+        return (tuple(sample),)
+    return tuple(tuple(point) for point in sample)
+
+
+class TouchInput(InputDevice):
+    """Adapt a board touch callable to pointer events for LVGL."""
+
+    type = POINTER
+    responses = (events.MOUSEMOTION, events.MOUSEBUTTONDOWN, events.MOUSEBUTTONUP)
+
+    def __init__(self, read, display, rotation_table=None):
+        super().__init__(read=read, data=display, data2=rotation_table)
+        self._data2 = self._data2 or _DEFAULT_TOUCH_ROTATION_TABLE
+        self.rotation = display.rotation
+        try:
+            display.touch_device = self
+        except Exception:
+            pass
+        self.points = ()
+
+    @property
+    def rotation(self):
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value):
+        self._rotation = value % 360
+        self._mask = self._data2[self._rotation // 90]
+
+    def _map_point(self, point):
+        x, y = int(point[0]), int(point[1])
+        if self._mask & _SWAP_XY:
+            x, y = y, x
+        if self._mask & _REVERSE_X:
+            x = self._data.width - x - 1
+        if self._mask & _REVERSE_Y:
+            y = self._data.height - y - 1
+        return (x, y) + tuple(point[2:]) if len(point) > 2 else (x, y)
+
+    def _poll(self):
+        try:
+            mapped = tuple(self._map_point(point) for point in _normalize_points(self._read()))
+        except OSError:
+            return None
+        self.points = mapped
+        if mapped:
+            x, y = int(mapped[0][0]), int(mapped[0][1])
+            previous = self._state
+            self._state = (x, y)
+            if previous is None:
+                return events.Button(events.MOUSEBUTTONDOWN, self._state, 1, False, None)
+            return events.Motion(
+                events.MOUSEMOTION,
+                self._state,
+                (x - previous[0], y - previous[1]),
+                (1, 0, 0),
+                False,
+                None,
+            )
+        if self._state is not None:
+            previous = self._state
+            self._state = None
+            return events.Button(events.MOUSEBUTTONUP, previous, 1, False, None)
+        return None
+
+
+class KeypadInput(InputDevice):
+    """Adapt a pressed-key collection to KEYDOWN/KEYUP events."""
+
+    type = KEYPAD
+    responses = (events.KEYDOWN, events.KEYUP)
+
+    def __init__(self, read):
+        super().__init__(read=read)
+        self._state = set()
+
+    @staticmethod
+    def _name(key):
+        name = keys.keyname(key)
+        if name != "Unknown":
+            return name
+        if isinstance(key, int) and 32 <= key <= 126:
+            return chr(key)
+        return "0x%x" % key if isinstance(key, int) else str(key)
+
+    def _poll(self):
+        current = set(self._read())
+        released = self._state - current
+        if released:
+            key = released.pop()
+            self._state.remove(key)
+            return events.Key(events.KEYUP, self._name(key), key, 0, 0, None)
+        pressed = current - self._state
+        if pressed:
+            key = pressed.pop()
+            self._state.add(key)
+            return events.Key(events.KEYDOWN, self._name(key), key, 0, 0, None)
+        return None
+
+
+class EncoderInput(InputDevice):
+    """Adapt an encoder position and optional button to LVGL events."""
+
+    type = ENCODER
+    responses = (events.MOUSEWHEEL, events.MOUSEBUTTONDOWN, events.MOUSEBUTTONUP)
+
+    def __init__(self, read, button_read=None, button=2):
+        super().__init__(read=read, read2=button_read, data=button)
+        self._state = (0, False)
+
+    def _poll(self):
+        last_pos, last_pressed = self._state
+        pressed = self._read2()
+        if pressed != last_pressed:
+            self._state = (last_pos, pressed)
+            return events.Button(
+                events.MOUSEBUTTONDOWN if pressed else events.MOUSEBUTTONUP,
+                (0, 0),
+                self._data,
+                False,
+                None,
+            )
+        pos = self._read()
+        if pos != last_pos:
+            steps = pos - last_pos
+            self._state = (pos, last_pressed)
+            if self._data % 2 == 0:
+                return events.Wheel(events.MOUSEWHEEL, False, 0, steps, 0, steps, False, None)
+            return events.Wheel(events.MOUSEWHEEL, False, steps, 0, steps, 0, False, None)
+        return None
+
+
+_virtual_peers = {}
+_virtual_pending = {}
+
+
+class VirtualDevices:
+    """Fan one host input into LVGL pointer, encoder, and keypad inputs."""
+
+    class VirtualDevice:
+        def __init__(self, owner, device_type):
+            self._owner = owner
+            self.type = device_type
+            self.user_data = None
+            self._fifo = []
+            self._callbacks = []
+            self._active_key_event = None
+            self.points = ()
+            self._fingers = {}
+
+        def subscribe(self, callback, event_types=None):
+            if callback not in self._callbacks:
+                self._callbacks.append(callback)
+
+        def unsubscribe(self, callback, event_types=None):
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+
+        @property
+        def has_pending(self):
+            return bool(self._fifo)
+
+        def poll(self, *args):
+            self._owner.poll_host_device()
+            event = self._fifo.pop(0) if self._fifo else None
+            for callback in tuple(self._callbacks):
+                callback(event, *args)
+
+        def add_event(self, event):
+            if (
+                event.type == events.MOUSEMOTION
+                and self._fifo
+                and self._fifo[-1].type == events.MOUSEMOTION
+            ):
+                self._fifo[-1] = event
+                return
+            if (
+                event.type == events.KEYDOWN
+                and self._fifo
+                and self._fifo[-1].type == events.KEYDOWN
+                and getattr(self._fifo[-1], "key", None) == getattr(event, "key", None)
+            ):
+                self._fifo[-1] = event
+                return
+            if self.type == KEYPAD:
+                key = getattr(event, "key", None)
+                active = self._active_key_event
+                active_key = getattr(active, "key", None)
+                if event.type == events.KEYDOWN:
+                    if active is not None and active_key != key:
+                        self._fifo.append(
+                            events.Key(
+                                events.KEYUP,
+                                active.name,
+                                active.key,
+                                active.mod,
+                                active.scancode,
+                                active.window,
+                            )
+                        )
+                    self._active_key_event = event
+                elif event.type == events.KEYUP:
+                    if active is not None and active_key != key:
+                        return
+                    self._active_key_event = None
+            self._fifo.append(event)
+
+        def _set_finger(self, finger_id, point):
+            if point is None:
+                self._fingers.pop(finger_id, None)
+            else:
+                self._fingers[finger_id] = point
+            self.points = tuple(
+                (pos[0], pos[1], fid) for fid, pos in self._fingers.items()
+            )
+
+    def __init__(self, host_device, window_id=None):
+        self._host_device = host_device
+        self._window_id = window_id
+        self._vd_pointer = self.VirtualDevice(self, POINTER)
+        self._vd_encoder = self.VirtualDevice(self, ENCODER)
+        self._vd_keypad = self.VirtualDevice(self, KEYPAD)
+        self.devices = [self._vd_pointer, self._vd_encoder, self._vd_keypad]
+        peers = _virtual_peers.setdefault(id(host_device), [])
+        peers.append(self)
+        self._peers = peers
+
+    def _accepts_window(self, event):
+        if self._window_id is None:
+            return True
+        window = getattr(event, "window", None)
+        return window is None or window == self._window_id
+
+    def poll_host_device(self):
+        if self._peers and self._peers[0] is not self:
+            return
+        pending = _virtual_pending.setdefault(id(self._host_device), [])
+        if not pending:
+            batch = self._host_device.poll()
+            if batch:
+                pending.extend(batch)
+        while pending:
+            event = pending.pop(0)
+            for peer in self._peers:
+                peer._route(event)
+            if event.type in (events.FINGERDOWN, events.FINGERUP, events.FINGERMOTION):
+                return
+
+    def _route(self, event):
+        if not self._accepts_window(event):
+            return
+        if event.type in (events.FINGERDOWN, events.FINGERMOTION):
+            pointer = self._vd_pointer
+            pointer._set_finger(event.finger_id, event.pos)
+            if pointer._fingers:
+                primary_id = min(pointer._fingers)
+                x, y = pointer._fingers[primary_id]
+                if event.finger_id == primary_id:
+                    if event.type == events.FINGERDOWN:
+                        pointer.add_event(
+                            events.Button(
+                                events.MOUSEBUTTONDOWN, (x, y), 1, True, event.window
+                            )
+                        )
+                    else:
+                        pointer.add_event(
+                            events.Motion(
+                                events.MOUSEMOTION,
+                                (x, y),
+                                (0, 0),
+                                (1, 0, 0),
+                                True,
+                                event.window,
+                            )
+                        )
+        elif event.type == events.FINGERUP:
+            pointer = self._vd_pointer
+            was_primary = pointer._fingers and event.finger_id == min(pointer._fingers)
+            last = pointer._fingers.get(event.finger_id, event.pos)
+            pointer._set_finger(event.finger_id, None)
+            if was_primary:
+                pointer.add_event(
+                    events.Button(events.MOUSEBUTTONUP, last, 1, True, event.window)
+                )
+        elif event.type in (events.MOUSEBUTTONDOWN, events.MOUSEBUTTONUP) or (
+            event.type == events.MOUSEMOTION and event.buttons[0]
+        ):
+            if not (getattr(event, "touch", False) and self._vd_pointer._fingers):
+                self._vd_pointer.add_event(event)
+        elif event.type == events.MOUSEWHEEL:
+            self._vd_encoder.add_event(event)
+        elif event.type in (events.KEYDOWN, events.KEYUP):
+            self._vd_keypad.add_event(event)
+
+
+class _TickSubscription:
+    def __init__(self, runtime, entry):
+        self._runtime = runtime
+        self._entry = entry
+
+    def deinit(self):
+        if self._entry is None:
+            return
+        try:
+            self._runtime._tick_callbacks.remove(self._entry)
+        except ValueError:
+            pass
+        self._entry = None
+
+
+def _interactive_session():
+    main = sys.modules.get("__main__")
+    main_file = getattr(main, "__file__", None) if main is not None else None
+    if getattr(sys.implementation, "name", "") == "cpython":
+        return bool(getattr(getattr(sys, "flags", None), "interactive", 0)) or main_file is None
+    try:
+        with open("/proc/self/cmdline", "rb") as cmdline:
+            args = tuple(value for value in cmdline.read().split(b"\0") if value)
+        if b"-i" in args:
+            return True
+        if b"-m" in args or b"-c" in args:
+            return False
+    except Exception:
+        pass
+    return main_file is None or main_file in ("<stdin>", "<string>")
+
+
+class LVGLRuntime:
+    """Private traffic coordinator owned by this LVGL bridge."""
+
+    events = events
+
+    def __init__(self, config):
+        self._config = config
+        self._displays = [config.display_drv]
+        self.devices = []
+        self.host_dev = None
+        self.touch_dev = None
+        self.keypad_dev = None
+        self.encoder_dev = None
+        self._event_callbacks = {}
+        self._tick_callbacks = []
+        self._timer = None
+        self._timer_async = bool(
+            getattr(
+                config,
+                "timer_async",
+                getattr(config.display_drv, "requires_async_timer", False),
+            )
+        )
+        self._pending_timer_async = False
+        self._in_tick = False
+        self._quit_requested = False
+        self._exit_code = None
+        self._blocking = False
+        self._before_quit = None
+        self._teardown_timer = None
+        self._teardown_done = False
+
+        host_read = getattr(config, "host_read", None)
+        if host_read is not None:
+            self.host_dev = self.register(HostInput(host_read, config.display_drv))
+        touch_read = getattr(config, "touch_read", None)
+        if touch_read is not None:
+            self.touch_dev = self.register(
+                TouchInput(
+                    touch_read,
+                    config.display_drv,
+                    getattr(config, "touch_rotation_table", None),
+                )
+            )
+        keypad_read = getattr(config, "keypad_read", None)
+        if keypad_read is not None:
+            self.keypad_dev = self.register(KeypadInput(keypad_read))
+        encoder_read = getattr(config, "encoder_read", None)
+        if encoder_read is not None:
+            self.encoder_dev = self.register(
+                EncoderInput(
+                    encoder_read,
+                    getattr(config, "encoder_button_read", None),
+                )
+            )
+
+    @property
+    def timer_async(self):
+        return self._timer_async
+
+    @property
+    def displays(self):
+        return tuple(self._displays)
+
+    @property
+    def primary(self):
+        return self._displays[0] if self._displays else None
+
+    @property
+    def touch_device(self):
+        return self.touch_dev
+
+    @property
+    def quit_requested(self):
+        return self._quit_requested
+
+    @property
+    def before_quit(self):
+        return self._before_quit
+
+    @before_quit.setter
+    def before_quit(self, callback):
+        if callback is not None and not callable(callback):
+            raise ValueError("before_quit must be callable")
+        self._before_quit = callback
+
+    def register(self, device):
+        device.runtime = self
+        self.devices.append(device)
+        return device
+
+    def add_display(self, display):
+        if display not in self._displays:
+            self._displays.append(display)
+        return display
+
+    def add_encoder(self, read, *, button_read=None, button=2):
+        self.encoder_dev = self.register(EncoderInput(read, button_read, button))
+        return self.encoder_dev
+
+    def on(self, event_type, callback):
+        if isinstance(event_type, (list, tuple)):
+            for item in event_type:
+                self.on(item, callback)
+            return
+        callbacks = self._event_callbacks.setdefault(event_type, [])
+        if callback not in callbacks:
+            callbacks.append(callback)
+
+    def _dispatch_event(self, event, device):
+        if event.type == events.QUIT:
+            self.request_quit()
+        for callback in tuple(self._event_callbacks.get(event.type, ())):
+            callback(event)
+
+    def poll(self):
+        try:
+            from multimer._schedule import _run_pending
+            from multimer._select import _drain
+
+            _run_pending()
+            if _drain is not None:
+                _drain()
+        except ImportError:
+            pass
+        result = []
+        for device in self.devices:
+            result.extend(device.poll())
+        return result
+
+    def _ensure_ticks(self):
+        if ticks_ms is None:
+            raise RuntimeError("multimer ticks helpers are required")
+
+    def _start_timer(self, asynchronous):
+        if self._timer is not None:
+            return self._timer
+        from multimer import AsyncTimer, Timer
+
+        timer_type = AsyncTimer if asynchronous else Timer
+        timer = None
+        error = None
+        for timer_id in (-1, 0, 1, 2, 3):
+            try:
+                timer = timer_type(timer_id)
+                break
+            except ValueError as exc:
+                error = exc
+        if timer is None:
+            raise error
+        self._timer = timer
+        timer.init(
+            mode=timer_type.PERIODIC,
+            period=LVGL_PERIOD_MS,
+            callback=self._dispatch_tick,
+            hard=False,
+        )
+        return timer
+
+    def _dispatch_tick(self, timer):
+        if self._in_tick or self._quit_requested:
+            return
+        self._in_tick = True
+        try:
+            now = ticks_ms()
+            for entry in tuple(self._tick_callbacks):
+                if ticks_diff(entry[2], now) > 0:
+                    continue
+                entry[2] = ticks_add(now, entry[1])
+                entry[0](timer)
+        finally:
+            self._in_tick = False
+        if self._quit_requested and not self._blocking:
+            self._defer_teardown()
+
+    def on_tick(self, callback, *, period, async_=False):
+        if not callable(callback):
+            raise ValueError("callback is not callable")
+        self._ensure_ticks()
+        if self._timer is None:
+            if async_ and not _asyncio_loop_running():
+                self._pending_timer_async = True
+            else:
+                self._start_timer(async_)
+        entry = [callback, int(period), ticks_add(ticks_ms(), int(period))]
+        self._tick_callbacks.append(entry)
+        return _TickSubscription(self, entry)
+
+    def stop_timer(self):
+        self._tick_callbacks = []
+        timer = self._timer
+        self._timer = None
+        self._pending_timer_async = False
+        if timer is not None:
+            timer.deinit()
+
+    def _arm_async(self):
+        inst = event_loop.current_instance()
+        if inst is not None:
+            inst.arm()
+        if self._pending_timer_async and self._timer is None:
+            self._start_timer(True)
+            self._pending_timer_async = False
+
+    async def run(self, tick_ms=LVGL_PERIOD_MS):
+        if asyncio is None:
+            raise RuntimeError("asyncio is not available")
+        self._arm_async()
+        self._blocking = True
+        try:
+            while not self._quit_requested:
+                await asyncio.sleep(tick_ms / 1000)
+                try:
+                    from multimer import run_deadline_hook
+
+                    run_deadline_hook()
+                except ImportError:
+                    pass
+        finally:
+            self._blocking = False
+            self._perform_teardown()
+        self._raise_exit_code()
+
+    def run_forever(self, tick_ms=LVGL_PERIOD_MS):
+        import multimer
+
+        if self._timer_async:
+            if _asyncio_loop_running():
+                self._arm_async()
+                return
+            if asyncio is None:
+                raise RuntimeError("asyncio is not available")
+            asyncio.run(self.run(tick_ms))
+            self._raise_exit_code()
+            return
+        if _interactive_session() and multimer.uses_signals():
+            return
+        self._blocking = True
+        try:
+            while not self._quit_requested:
+                multimer.sleep_ms(tick_ms)
+        finally:
+            self._blocking = False
+            self._perform_teardown()
+        self._raise_exit_code()
+
+    def run_async(self, coro_or_fn):
+        if asyncio is None:
+            raise RuntimeError("asyncio is not available")
+
+        async def runner():
+            self._arm_async()
+            coro = coro_or_fn() if callable(coro_or_fn) else coro_or_fn
+            return await coro
+
+        if _asyncio_loop_running():
+            return asyncio.create_task(runner())
+        return asyncio.run(runner())
+
+    def request_quit(self, code=None):
+        self._quit_requested = True
+        if code is not None:
+            self._exit_code = int(code)
+        if not self._in_tick and not self._blocking:
+            self._perform_teardown()
+
+    def _raise_exit_code(self):
+        if self._exit_code is None:
+            return
+        code = self._exit_code
+        self._exit_code = None
+        raise SystemExit(code)
+
+    def _defer_teardown(self):
+        if self._teardown_done or self._teardown_timer is not None:
+            return
+        from multimer import Timer
+
+        helper = None
+        error = None
+        for timer_id in (-1, 0, 1, 2, 3):
+            try:
+                helper = Timer(timer_id)
+                break
+            except ValueError as exc:
+                error = exc
+        if helper is None:
+            raise error
+        self._teardown_timer = helper
+
+        def finish(_timer):
+            self._teardown_timer = None
+            self._perform_teardown()
+
+        helper.init(mode=Timer.ONE_SHOT, period=1, callback=finish, hard=False)
+
+    def _perform_teardown(self):
+        if self._teardown_done:
+            return
+        self._teardown_done = True
+        if self._before_quit is not None:
+            self._before_quit()
+        self.stop_timer()
+        for panel in tuple(self._displays):
+            close = getattr(panel, "quit", None) or getattr(panel, "deinit", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+        self._displays = []
+
+
+runtime = LVGLRuntime(board_config)
+
 
 def _asyncio_loop_running():
     """True when an asyncio loop is already running (host loop or inside a task)."""
@@ -79,7 +856,7 @@ def _asyncio_loop_running():
 
 
 class event_loop:
-    """LVGL task loop driven by ``eventsys.Runtime.on_tick``.
+    """LVGL task loop driven by ``LVGLRuntime.on_tick``.
 
     One instance may be active at a time. Sync mode runs ``lv.task_handler``
     from the shared timer; async mode signals an asyncio refresh task.
@@ -111,8 +888,8 @@ class event_loop:
             period_ms: Explicit tick period in milliseconds (overrides ``freq``).
 
         Raises:
-            RuntimeError: Another loop is already running, ``runtime`` is
-                missing, or async mode is requested without asyncio.
+            RuntimeError: Another loop is already running or async mode is
+                requested without asyncio.
         """
         if self.is_running():
             raise RuntimeError("Event loop is already running!")
@@ -145,9 +922,6 @@ class event_loop:
         self._timer_sub = None
         self._async_armed = False
 
-        if runtime is None:
-            raise RuntimeError("LVGL requires board_config.runtime")
-
         if self.asynchronous:
             if not asyncio_available:
                 raise RuntimeError("Cannot run asynchronous event loop. asyncio is not available!")
@@ -163,7 +937,7 @@ class event_loop:
         # runtime.stop_timer() deinits the HW timer and clears callbacks but
         # does not notify us — drop a stale handle so we can re-subscribe.
         if self._timer_sub is not None:
-            if runtime is not None and runtime._timer is not None:
+            if runtime._timer is not None:
                 return
             self._timer_sub = None
         self._timer_sub = runtime.on_tick(self.timer_cb, period=self.delay, async_=False)
@@ -315,17 +1089,15 @@ def main():
     """Initialize LVGL, wire :class:`DisplayDriver`, and enable the event loop.
 
     Called automatically on ``import display_driver`` when ``board_config``
-    provides ``display_drv`` / ``runtime``.
+    provides ``display_drv`` and optional neutral input callables.
     """
     global _driver_ref, _drivers, _host_pump_sub
     gc.collect()
     if not lv.is_initialized():
         lv.init()
-    # board_config.Runtime arms machine.Timer immediately. Halt every
-    # machine.Timer callback before SPIRAM draw_buf_create; re-arm only after
-    # buffers exist.
-    if runtime is not None:
-        runtime.stop_timer()
+    # Never arm a timer before SPIRAM draw buffers exist. A soft-timer callback
+    # during draw_buf_create can corrupt LVGL handlers on ESP32-P4.
+    runtime.stop_timer()
     loop_inst = event_loop.current_instance()
     if loop_inst is not None:
         # Already-running loop: pause around driver (re)construction.
@@ -334,7 +1106,7 @@ def main():
         if lv.group_get_default() is None:
             lv.group_create().set_default()
 
-        devs = runtime.devices if runtime is not None else []
+        devs = runtime.devices
         _driver_ref = DisplayDriver(
             display_drv,
             devs,
@@ -344,54 +1116,43 @@ def main():
         # on_tick until enable(); still construct after DisplayDriver so
         # host_pump / service cannot arm the shared timer early).
         if loop_inst is None:
-            if runtime is not None:
-                runtime.claim_display_refresh()
             # PARTIAL: present after every task_handler (blit already wrote the
             # panel FB). Shared DIRECT: present only from flush_is_last.
             loop_inst = event_loop(
                 period_ms=LVGL_PERIOD_MS,
-                asynchronous=runtime.timer_async if runtime is not None else False,
+                asynchronous=runtime.timer_async,
                 refresh_cb=_present_lvgl_displays,
             )
         _ensure_host_pump()
-        # Restore Runtime auto-service (touch / QUIT) cleared by stop_timer().
-        if runtime is not None:
-            runtime._arm_service()
     finally:
         if loop_inst is not None:
             loop_inst.enable()
 
-    if runtime is not None:
-
-        def _lvgl_shutdown_before_quit():
-            # Runs from Runtime._handle_quit (device QUIT or at-exit) before the
-            # shared timer stops and the display is released. Tear LVGL down in
-            # order: stop the event loop, then lv.deinit() to release LVGL's C
-            # state so nothing dereferences it during interpreter finalization.
-            global _host_pump_sub
-            if _host_pump_sub is not None:
-                try:
-                    _host_pump_sub.deinit()
-                except Exception:
-                    pass
-                _host_pump_sub = None
-            inst = event_loop.current_instance()
-            if inst is not None:
-                inst.deinit()
+    def _lvgl_shutdown_before_quit():
+        # Stop the bridge before releasing the display so no callback can touch
+        # LVGL state during interpreter finalization.
+        global _host_pump_sub
+        if _host_pump_sub is not None:
             try:
-                if lv.is_initialized():
-                    lv.deinit()
+                _host_pump_sub.deinit()
             except Exception:
                 pass
+            _host_pump_sub = None
+        inst = event_loop.current_instance()
+        if inst is not None:
+            inst.deinit()
+        try:
+            if lv.is_initialized():
+                lv.deinit()
+        except Exception:
+            pass
 
-        runtime.before_quit = _lvgl_shutdown_before_quit
+    runtime.before_quit = _lvgl_shutdown_before_quit
 
 
 def _ensure_host_pump():
     """Keep HOST/SDL draining on the 10 ms Runtime tick for all drivers."""
     global _host_pump_sub
-    if runtime is None:
-        return
     if _host_pump_sub is not None and runtime._timer is not None:
         return
     if _host_pump_sub is not None:
@@ -445,12 +1206,12 @@ def _present_lvgl_displays():
 def attach(display, devices=None, *, color_format=None, blocking=True):
     """Attach an additional displaydev panel as an LVGL display.
 
-    Call after ``import display_driver`` (primary already wired) and after
-    ``runtime.add_display(display)``.
+    Call after ``import display_driver`` (primary already wired). The display
+    is also registered with this module's LVGL runtime.
 
     Args:
         display: Secondary displaydev driver.
-        devices: Optional eventsys devices to bind as indevs on this display.
+        devices: Optional LVGL input devices to bind as indevs on this display.
             When omitted and ``runtime.host_dev`` exists, that host device is
             reused (window-filtered) so the secondary panel receives pointer
             input.
@@ -465,8 +1226,9 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
         raise RuntimeError("import display_driver before attach()")
     if devices is None:
         devices = []
-        if runtime is not None and getattr(runtime, "host_dev", None) is not None:
+        if getattr(runtime, "host_dev", None) is not None:
             devices = [runtime.host_dev]
+    runtime.add_display(display)
     kwargs = {"devs": devices, "blocking": blocking}
     if color_format is not None:
         kwargs["color_format"] = color_format
@@ -480,10 +1242,10 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
 
 
 def attach_devices(devs, lv_display=None):
-    """Register eventsys devices as LVGL indevs without creating a display.
+    """Register LVGL input devices as LVGL indevs without creating a display.
 
     Args:
-        devs: Iterable of eventsys devices (encoder, keypad, pointer, …).
+        devs: Iterable of LVGL input devices (encoder, keypad, pointer, …).
         lv_display: Target ``lv.display``; default is the primary LVGL display.
 
     Returns:
@@ -807,7 +1569,7 @@ def _apply_mods(k, mod):
 
 
 def _lv_key_from_event(event, tracked_mods=0):
-    """Map eventsys/SDL key codes to ``lv.KEY_*`` / Unicode for the keypad indev.
+    """Map shared SDL-style key codes to ``lv.KEY_*`` / Unicode for LVGL.
 
     Arrows become caret keys (``lv.KEY.LEFT``/…). Tab still moves group focus
     (``NEXT`` / ``PREV``). Modifier keys are not returned — they corrupt text
@@ -902,10 +1664,10 @@ def _make_keypad_cb(device):
 
 
 def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
-    """Register eventsys devices as LVGL indevs (pointer / encoder / keypad).
+    """Register LVGL input devices as LVGL indevs (pointer / encoder / keypad).
 
     Args:
-        devs: Iterable of eventsys devices from ``runtime.devices``.
+        devs: Iterable of LVGL input devices from ``runtime.devices``.
         lv_display: LVGL display object to attach indevs to.
         virtual_devices: Optional list mutated when expanding :class:`HostEventsDevice`
             into virtual pointer/keypad devices.
@@ -917,20 +1679,20 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
     if virtual_devices is None:
         virtual_devices = []
     for device in devs:
-        if device.type in (eventsys.POINTER, eventsys.ENCODER, eventsys.KEYPAD):
+        if device.type in (POINTER, ENCODER, KEYPAD):
             indev = lv.indev_create()
             indev.set_display(lv_display)
             device.user_data = indev
-            if device.type == eventsys.POINTER:
+            if device.type == POINTER:
                 event_cb = _make_touch_cb(device)
                 device.subscribe(event_cb)
                 indev.set_type(lv.INDEV_TYPE.POINTER)
                 _configure_gesture_recognizers(indev)
-            elif device.type == eventsys.ENCODER:
+            elif device.type == ENCODER:
                 event_cb = _encoder_cb
                 device.subscribe(event_cb)
                 indev.set_type(lv.INDEV_TYPE.ENCODER)
-            elif device.type == eventsys.KEYPAD:
+            elif device.type == KEYPAD:
                 event_cb = _make_keypad_cb(device)
                 device.subscribe(event_cb)
                 indev.set_type(lv.INDEV_TYPE.KEYPAD)
@@ -946,7 +1708,7 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
                 # empty, preserving fast KEYDOWN/KEYUP sequences without adding
                 # one LVGL refresh period of latency per transition.
                 data.continue_reading = bool(getattr(_dev, "has_pending", False))
-                if _dev.type == eventsys.POINTER:
+                if _dev.type == POINTER:
                     _gesture_feed(indev_obj, data, _dev)
 
             indev.set_group(lv.group_get_default())
@@ -955,13 +1717,13 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
             read_timer = indev.get_read_timer()
             if read_timer is not None:
                 read_timer.set_period(LVGL_PERIOD_MS)
-        elif device.type == eventsys.HOST:
+        elif device.type == HOST:
             wid = window_id
             if wid is None:
                 host_disp = getattr(device, "_data", None)
                 if host_disp is not None:
                     wid = getattr(host_disp, "_window_id", None)
-            vd = eventsys.VirtualDevices(device, window_id=wid)
+            vd = VirtualDevices(device, window_id=wid)
             virtual_devices.append(vd)
             create_devices(vd.devices, lv_display, virtual_devices, window_id=wid)
     return virtual_devices
@@ -971,7 +1733,7 @@ class DisplayDriver:
     """Bridge a displaydev driver to an LVGL display + input devices.
 
     Creates the LVGL display, chooses DIRECT (shared framebuffer) or PARTIAL
-    render mode, installs flush callbacks, and wires eventsys devices via
+    render mode, installs flush callbacks, and wires LVGL input devices via
     :func:`create_devices`.
     """
 
@@ -986,7 +1748,7 @@ class DisplayDriver:
 
         Args:
             display_drv: displaydev driver (BusDisplay, SDLDisplay, FBDisplay, …).
-            devs: Iterable of eventsys devices to register as LVGL indevs.
+            devs: Iterable of LVGL input devices to register as LVGL indevs.
             color_format: LVGL color format (default RGB565).
             blocking: When False, register a bus flush-ready callback for async blit.
         """

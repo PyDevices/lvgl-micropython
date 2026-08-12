@@ -85,7 +85,7 @@ Prefer the unified smoke test directly: `lvgl-bindings/tools/test_lvgl_smoke.py`
 | `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Freezes `lib/display_driver.py` (sync from lvgl-bindings) |
-| `lib/display_driver.py` | Vendored pydisplay LVGL glue (`import display_driver`) |
+| `lib/display_driver.py` | Vendored PyDevices LVGL glue (`import display_driver`) |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh `lib/display_driver.py` from lvgl-bindings |
 | `tools/test_lvgl_unix.py` | Deprecated wrapper → `lvgl-bindings/tools/test_lvgl_smoke.py` |
 

@@ -2,15 +2,15 @@
 # For Make-based builds, see the .mk file in the same directory.
 
 # Point USER_C_MODULES at this repo (or this file) directly, e.g.:
-#     idf.py build -DUSER_C_MODULES=<path to lv_micropython_cmod>
+#     idf.py build -DUSER_C_MODULES=<path to lvgl-micropython>
 # usermod.cmake also accepts a semicolon-separated list of module paths if you
 # want this module plus others — no aggregator file required, e.g.:
-#     -DUSER_C_MODULES="<path to lv_micropython_cmod>;<path to other_mod>"
+#     -DUSER_C_MODULES="<path to lvgl-micropython>;<path to other_mod>"
 
 set(LVMP_DIR ${CMAKE_CURRENT_LIST_DIR})
 get_filename_component(WORKSPACE_DIR ${LVMP_DIR} DIRECTORY)
 if(NOT DEFINED BINDINGS_DIR)
-    set(BINDINGS_DIR ${WORKSPACE_DIR}/lv_bindings)
+    set(BINDINGS_DIR ${WORKSPACE_DIR}/lvgl-bindings)
 endif()
 set(LVMP_C ${BINDINGS_DIR}/generated/lvgl_micropython.c)
 set(LVGL_DIR ${BINDINGS_DIR}/lvgl)

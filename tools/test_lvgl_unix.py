@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Deprecated — use ../../lv_bindings/tools/test_lvgl_smoke.py."""
+"""Deprecated — use ../../lvgl-bindings/tools/test_lvgl_smoke.py."""
 import runpy
 import sys
 from pathlib import Path
 
-_SMOKE = Path(__file__).resolve().parents[2] / "lv_bindings" / "tools" / "test_lvgl_smoke.py"
+_SMOKE = Path(__file__).resolve().parents[2] / "lvgl-bindings" / "tools" / "test_lvgl_smoke.py"
 if not _SMOKE.is_file():
     sys.exit("Missing unified smoke test: {}".format(_SMOKE))
 runpy.run_path(str(_SMOKE), run_name="__main__")

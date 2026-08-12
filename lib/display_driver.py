@@ -6,8 +6,8 @@
 """
 display_driver.py - LVGL display/input wiring and event loop for pydisplay.
 
-Canonical copy lives in PyDevices/lv_bindings (``python/display_driver.py``).
-Consumer repos (lv_micropython_cmod, lv_circuitpython_mod, lv_cpython_mod)
+Canonical copy lives in PyDevices/lvgl-bindings (``python/display_driver.py``).
+Consumer repos (lvgl-micropython, lvgl-circuitpython, lvgl-python)
 vendor a synced copy; do not edit those copies directly.
 
 Requires a valid board_config.py on the path (pydisplay). Importing this module

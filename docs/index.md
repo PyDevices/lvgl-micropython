@@ -1,10 +1,10 @@
-# lv_micropython_cmod
+# lvgl-micropython
 
 MicroPython **user C module** glue for [LVGL](https://lvgl.io/): Make/CMake
 usermod entry points, a GC-aware allocator, and an optional frozen manifest.
 
 This repo does **not** regenerate bindings. It consumes
-[`lv_bindings`](https://github.com/PyDevices/lv_bindings)
+[`lvgl-bindings`](https://github.com/PyDevices/lvgl-bindings)
 (`generated/lvgl_micropython.c` + the `lvgl` submodule).
 
 ## Layout
@@ -15,7 +15,7 @@ This repo does **not** regenerate bindings. It consumes
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
 | `docs/` | This documentation |
-| `tools/test_lvgl_unix.py` | Deprecated smoke wrapper → `lv_bindings/tools/test_lvgl_smoke.py` |
+| `tools/test_lvgl_unix.py` | Deprecated smoke wrapper → `lvgl-bindings/tools/test_lvgl_smoke.py` |
 
 ## Build
 
@@ -23,7 +23,7 @@ This repo does **not** regenerate bindings. It consumes
 
 ```bash
 cd micropython/ports/unix
-make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lv_micropython_cmod/manifest.py
+make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.py
 ```
 
 CMake ports (esp32, rp2): point `USER_C_MODULES` at **this repo**.
@@ -34,10 +34,10 @@ See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way 
 
 ```bash
 ./micropython/ports/unix/build-standard/micropython \
-  ./lv_bindings/tools/test_lvgl_smoke.py
+  ./lvgl-bindings/tools/test_lvgl_smoke.py
 ```
 
 ## Related
 
-- CircuitPython: [lv_circuitpython_mod](https://github.com/PyDevices/lv_circuitpython_mod)
-- CPython: [lv_cpython_mod](https://github.com/PyDevices/lv_cpython_mod) (`pip install lvgl-cpython`)
+- CircuitPython: [lvgl-circuitpython](https://github.com/PyDevices/lvgl-circuitpython)
+- CPython: [lvgl-python](https://github.com/PyDevices/lvgl-python) (`pip install pydevices-lvgl`)

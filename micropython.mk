@@ -5,7 +5,7 @@
 #     make USER_C_MODULES=<path to workspace root>
 
 LVMP_DIR := $(USERMOD_DIR)
-BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lv_bindings)
+BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lvgl-bindings)
 LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")

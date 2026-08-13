@@ -69,6 +69,25 @@ make BOARD=ESP32_GENERIC_S3 \
 
 See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
 
+## Runtime Usage & Timer Model
+
+In MicroPython, `display_driver` uses `machine.Timer` (hardware interrupts):
+- **Interactive REPL (`micropython -i` or on-board prompt)**: Simply create widgets and drop out to the prompt. Hardware timer interrupts keep LVGL animations, timers, and touch input running continuously in the background while you inspect variables or test code interactively.
+- **Standalone Scripts**: Use `runtime.run_forever()` if you need an explicit loop for non-interactive desktop scripts.
+
+```python
+import display_driver  # noqa: F401 - initializes display, input, and machine.Timer
+import lvgl as lv
+
+scr = lv.screen_active()
+btn = lv.button(scr)
+btn.center()
+label = lv.label(btn)
+label.set_text("Hello MicroPython LVGL!")
+
+# Dropping out the bottom leaves the UI active in the background!
+```
+
 ## Smoke test
 
 ```bash
@@ -80,7 +99,7 @@ Prefer the unified smoke test directly: `lvgl-bindings/tools/test_lvgl_smoke.py`
 ## Files
 
 | Path | Role |
-|------|------|
+|---|---|
 | `micropython.mk` | Make ports — `USER_C_MODULES` = workspace parent |
 | `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
@@ -90,3 +109,4 @@ Prefer the unified smoke test directly: `lvgl-bindings/tools/test_lvgl_smoke.py`
 | `tools/test_lvgl_unix.py` | Deprecated wrapper → `lvgl-bindings/tools/test_lvgl_smoke.py` |
 
 CircuitPython integration lives in [lvgl-circuitpython](https://github.com/PyDevices/lvgl-circuitpython).
+

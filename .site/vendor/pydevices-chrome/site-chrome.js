@@ -77,14 +77,15 @@
     '</div>' +
     '<div class="tree-view">' +
     '<div class="tree-branch open">' +
-    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 Tier 1: Core Platform & Board Contract</div>' +
+    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 1: Core Platform & Board Contract</div>' +
     '<div class="tree-branch-children">' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pydevices/"><span class="tree-leaf-name">pydevices</span><span class="tag tag-tier-1">Core Board Contract</span></a>' +
+    '<a class="tree-leaf" href="https://pydevices.github.io/displayif/"><span class="tree-leaf-name">displayif</span><span class="tag tag-tier-1">C Bus Interface</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pydevices-examples/"><span class="tree-leaf-name">pydevices-examples</span><span class="tag tag-tier-1">Showcase & Demos</span></a>' +
     '</div>' +
     '</div>' +
     '<div class="tree-branch open">' +
-    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 Tier 2: Pure-Python & Portable Toolkits</div>' +
+    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 2: Pure-Python & Portable Toolkits</div>' +
     '<div class="tree-branch-children">' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pygraphics/"><span class="tree-leaf-name">pygraphics</span><span class="tag tag-tier-2">2D FrameBuffer</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pdwidgets/"><span class="tree-leaf-name">pdwidgets</span><span class="tag tag-tier-2">UI Toolkit</span></a>' +
@@ -92,9 +93,8 @@
     '</div>' +
     '</div>' +
     '<div class="tree-branch open">' +
-    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 Tier 3: Accelerated C & Native Modules</div>' +
+    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 3: LVGL Native Extensions & Binding Generator</div>' +
     '<div class="tree-branch-children">' +
-    '<a class="tree-leaf" href="https://pydevices.github.io/displayif/"><span class="tree-leaf-name">displayif</span><span class="tag tag-tier-3">C Bus Interface</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/lvgl-bindings/"><span class="tree-leaf-name">lvgl-bindings</span><span class="tag tag-tier-3">LVGL Generator</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/lvgl-micropython/"><span class="tree-leaf-name">lvgl-micropython</span><span class="tag tag-tier-3">MicroPython C</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/lvgl-python/"><span class="tree-leaf-name">lvgl-python</span><span class="tag tag-tier-3">CPython / WASM</span></a>' +
@@ -102,17 +102,17 @@
     '</div>' +
     '</div>' +
     '<div class="tree-branch open">' +
-    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 Tier 4: Target App Hosts & PWAs</div>' +
+    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 4: Target App Hosts & PWAs</div>' +
     '<div class="tree-branch-children">' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pydevices-pyscript-template/"><span class="tree-leaf-name">pyscript-template</span><span class="tag tag-tier-4">PWA Template</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/pydevices-android-template/"><span class="tree-leaf-name">android-template</span><span class="tag tag-tier-4">Android APK</span></a>' +
     '</div>' +
     '</div>' +
     '<div class="tree-branch open">' +
-    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 Tier 5: Developer Tools & Infrastructure</div>' +
+    '<div class="tree-branch-header"><svg class="tree-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg> 📁 5: Developer Tools & Infrastructure</div>' +
     '<div class="tree-branch-children">' +
-    '<a class="tree-leaf" href="https://PyDevices.github.io/micropython-lib/mip/PyDevices"><span class="tree-leaf-name">micropython-lib</span><span class="tag tag-tier-5">PyDevices MIP Index</span></a>' +
-    '<a class="tree-leaf" href="https://github.com/PyDevices/cmods"><span class="tree-leaf-name">cmods</span><span class="tag tag-tier-5">Build Workspace</span></a>' +
+    '<a class="tree-leaf" href="https://pydevices.github.io/micropython-lib/"><span class="tree-leaf-name">micropython-lib</span><span class="tag tag-tier-5">PyDevices MIP Index</span></a>' +
+    '<a class="tree-leaf" href="https://pydevices.github.io/cmods/"><span class="tree-leaf-name">cmods</span><span class="tag tag-tier-5">Build Workspace</span></a>' +
     '<a class="tree-leaf" href="https://pydevices.github.io/mpftp/"><span class="tree-leaf-name">mpftp</span><span class="tag tag-tier-5">REPL / Transfer Tool</span></a>' +
     '</div>' +
     '</div>' +

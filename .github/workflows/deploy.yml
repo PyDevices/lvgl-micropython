@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - 'web/**'
-      - '.github/workflows/deploy-pages.yml'
+      - ".site/**"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
       - name: Assemble GitHub Pages site
         run: |
           mkdir -p _site
-          cp -r web/* _site/
+          cp -r .site/* _site/
           touch _site/.nojekyll
 
       - name: Deploy to gh-pages

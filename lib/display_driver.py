@@ -650,12 +650,9 @@ class LVGLRuntime:
 
     def poll(self):
         try:
-            from multimer._schedule import _run_pending
-            from multimer._select import _drain
+            from multimer import auto as timer
 
-            _run_pending()
-            if _drain is not None:
-                _drain()
+            timer.pump()
         except ImportError:
             pass
         result = []
@@ -670,9 +667,10 @@ class LVGLRuntime:
     def _start_timer(self, asynchronous):
         if self._timer is not None:
             return self._timer
-        from multimer import AsyncTimer, Timer
+        from multimer import AsyncTimer
+        from multimer import auto as timer
 
-        timer_type = AsyncTimer if asynchronous else Timer
+        timer_type = AsyncTimer if asynchronous else timer.Timer
         timer = None
         error = None
         for timer_id in (-1, 0, 1, 2, 3):
@@ -759,7 +757,7 @@ class LVGLRuntime:
         self._raise_exit_code()
 
     def run_forever(self, tick_ms=LVGL_PERIOD_MS):
-        import multimer
+        from multimer import auto as timer
 
         if self._timer_async:
             if _asyncio_loop_running():
@@ -770,13 +768,13 @@ class LVGLRuntime:
             asyncio.run(self.run(tick_ms))
             self._raise_exit_code()
             return
-        if _interactive_session() and multimer.uses_signals():
+        if _interactive_session() and timer.uses_interrupts:
             return
         self._blocking = True
         self._blocking_run_forever = True  # harness / eventsys duck-typing parity
         try:
             while not self._quit_requested:
-                multimer.sleep_ms(tick_ms)
+                timer.sleep_ms(tick_ms)
         finally:
             self._blocking = False
             self._blocking_run_forever = False
@@ -813,7 +811,9 @@ class LVGLRuntime:
     def _defer_teardown(self):
         if self._teardown_done or self._teardown_timer is not None:
             return
-        from multimer import Timer
+        from multimer import auto as timer
+
+        Timer = timer.Timer
 
         helper = None
         error = None

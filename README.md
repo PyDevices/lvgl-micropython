@@ -2,7 +2,7 @@
 
 MicroPython user C module glue for LVGL: `micropython.mk`, CMake usermod, GC-aware allocator, and smoke tests.
 
-This repo is a consumer/build repo for the LVGL stack. It consumes generated bindings from lvgl-bindings and rebuilds MicroPython targets, but it does not publish its own package to TestPyPI; lvgl-python is the publishing endpoint for the family.
+This repo is a consumer/build repo for the LVGL stack: it consumes generated bindings from lvgl-bindings and rebuilds MicroPython targets, but does not publish its own package. See [lvgl-bindings — The LVGL family](https://github.com/PyDevices/lvgl-bindings#the-lvgl-family) for how the family fits together.
 
 Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) with `generated/lvgl_micropython.c` (run `regenerate_lvmp.sh`).
 

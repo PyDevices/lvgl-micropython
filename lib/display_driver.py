@@ -11,25 +11,24 @@ Consumer repos (lvgl-micropython, lvgl-circuitpython, lvgl-python)
 vendor a synced copy; do not edit those copies directly.
 
 Requires a valid ``board_config.py`` on the path. Importing this module creates
-an LVGL-owned runtime, starts ``event_loop``, and registers display flush and
-input devices. It intentionally does not depend on the optional ``eventsys``
-application traffic controller.
+an ``appdev.App`` coordinator, starts ``event_loop``, and registers display flush
+and input devices.
 
 ``event_loop`` was adapted from upstream lv_utils (Amir Gonnen). Integration
-changes kept intentionally small:
+changes:
 
-* Periodic tick from the local LVGL runtime instead of ``machine.Timer``.
+* Periodic tick driven by ``appdev.App.every``.
 * ``asyncio`` from ``multimer``.
 * Sync path runs ``lv.task_handler()`` from the tick callback (re-entrancy
-  guarded); the runtime timer already delivers on the main thread.
+  guarded); the app timer delivers on the main thread.
 * Async mode arms the refresh task lazily on the first timer tick so module-top
   ``import display_driver`` is safe before any event loop exists.
-* No app-loop helper — LVGL apps call ``runtime.run_forever()``.
+* Application lifecycle driven by ``appdev.App.run()``.
 
 Interactive desktop (librt + REPL): ``task_handler`` / indev reads are paced at
 ``LVGL_PERIOD_MS`` (10 ms) with a wall-clock gate. Display refresh stays at
 LVGL's ``LV_DEF_REFR_PERIOD`` (~33 ms). PARTIAL ``show()`` is gated to that
-refresh cadence so presents do not track the faster task loop. The Runtime
+refresh cadence so presents do not track the faster task loop. The App
 timer stays at 10 ms; a host-pump subscription drains SDL/keys every tick so
 the window cannot stall while LVGL is paused or slow.
 """
@@ -65,13 +64,11 @@ _drivers = []  # all DisplayDriver instances
 _host_pump_sub = None
 _present_next_ok_ms = None
 
-# Local input types. Values intentionally match LVGL's historical PyDevices
-# bridge values so diagnostic code can inspect ``device.type`` without
-# importing the optional eventsys package.
-HOST = 0x01
-POINTER = 0x02
-ENCODER = 0x03
-KEYPAD = 0x04
+HOST = appdev.HOST
+POINTER = appdev.POINTER
+ENCODER = appdev.ENCODER
+KEYPAD = appdev.KEYPAD
+JOYSTICK = appdev.JOYSTICK
 
 
 class InputDevice:
@@ -86,17 +83,17 @@ class InputDevice:
         self._read2 = read2 if read2 is not None else lambda: None
         self._data2 = data2
         self._state = None
-        self._runtime = None
+        self._app = None
         self._user_data = None
         self._callbacks = []
 
     @property
-    def runtime(self):
-        return self._runtime
+    def app(self):
+        return self._app
 
-    @runtime.setter
-    def runtime(self, value):
-        self._runtime = value
+    @app.setter
+    def app(self, value):
+        self._app = value
 
     @property
     def user_data(self):
@@ -123,8 +120,6 @@ class InputDevice:
         result = raw if isinstance(raw, list) else [raw]
         result = [event for event in result if event.type in events.filter]
         for event in result:
-            if self._runtime is not None:
-                self._runtime._dispatch_event(event, self)
             for callback, event_types in tuple(self._callbacks):
                 if event_types is None or event.type in event_types:
                     callback(event, *args)
@@ -143,8 +138,8 @@ class HostInput(InputDevice):
 
     def _touch_scale_for(self, window_id):
         panel = self._data
-        if window_id is not None and self._runtime is not None:
-            for candidate in self._runtime.displays:
+        if window_id is not None and self._app is not None:
+            for candidate in self._app.displays:
                 if getattr(candidate, "_window_id", None) == window_id:
                     panel = candidate
                     break
@@ -500,368 +495,19 @@ class VirtualDevices:
             self._vd_keypad.add_event(event)
 
 
-class _TickSubscription:
-    def __init__(self, runtime, entry):
-        self._runtime = runtime
-        self._entry = entry
+import appdev
 
-    def deinit(self):
-        if self._entry is None:
-            return
-        try:
-            self._runtime._tick_callbacks.remove(self._entry)
-        except ValueError:
-            pass
-        self._entry = None
-
-
-def _interactive_session():
-    main = sys.modules.get("__main__")
-    main_file = getattr(main, "__file__", None) if main is not None else None
-    if getattr(sys.implementation, "name", "") == "cpython":
-        return bool(getattr(getattr(sys, "flags", None), "interactive", 0)) or main_file is None
-    try:
-        with open("/proc/self/cmdline", "rb") as cmdline:
-            args = tuple(value for value in cmdline.read().split(b"\0") if value)
-        if b"-i" in args:
-            return True
-        if b"-m" in args or b"-c" in args:
-            return False
-    except Exception:
-        pass
-    return main_file is None or main_file in ("<stdin>", "<string>")
-
-
-class LVGLRuntime:
-    """Private traffic coordinator owned by this LVGL bridge."""
-
-    events = events
-
-    def __init__(self, config):
-        self._config = config
-        self._displays = [config.display_drv]
-        self.devices = []
-        self.host_dev = None
-        self.touch_dev = None
-        self.keypad_dev = None
-        self.encoder_dev = None
-        self._event_callbacks = {}
-        self._tick_callbacks = []
-        self._timer = None
-        self._timer_async = bool(
-            getattr(
-                config,
-                "timer_async",
-                getattr(config.display_drv, "requires_async_timer", False),
-            )
-        )
-        self._pending_timer_async = False
-        self._in_tick = False
-        self._quit_requested = False
-        self._exit_code = None
-        self._blocking = False
-        self._blocking_run_forever = False
-        self._before_quit = None
-        self._teardown_timer = None
-        self._teardown_done = False
-
-        host_read = getattr(config, "host_read", None)
-        if host_read is not None:
-            self.host_dev = self.register(HostInput(host_read, config.display_drv))
-        touch_read = getattr(config, "touch_read", None)
-        if touch_read is not None:
-            self.touch_dev = self.register(
-                TouchInput(
-                    touch_read,
-                    config.display_drv,
-                    getattr(config, "touch_rotation_table", None),
-                )
-            )
-        keypad_read = getattr(config, "keypad_read", None)
-        if keypad_read is not None:
-            self.keypad_dev = self.register(KeypadInput(keypad_read))
-        encoder_read = getattr(config, "encoder_read", None)
-        if encoder_read is not None:
-            self.encoder_dev = self.register(
-                EncoderInput(
-                    encoder_read,
-                    getattr(config, "encoder_button_read", None),
-                )
-            )
-
-    @property
-    def timer_async(self):
-        return self._timer_async
-
-    @property
-    def displays(self):
-        return tuple(self._displays)
-
-    @property
-    def primary(self):
-        return self._displays[0] if self._displays else None
-
-    @property
-    def touch_device(self):
-        return self.touch_dev
-
-    @property
-    def quit_requested(self):
-        return self._quit_requested
-
-    @property
-    def before_quit(self):
-        return self._before_quit
-
-    @before_quit.setter
-    def before_quit(self, callback):
-        if callback is not None and not callable(callback):
-            raise ValueError("before_quit must be callable")
-        self._before_quit = callback
-
-    def register(self, device):
-        device.runtime = self
-        self.devices.append(device)
-        return device
-
-    def add_display(self, display):
-        if display not in self._displays:
-            self._displays.append(display)
-        return display
-
-    def add_encoder(self, read, *, button_read=None, button=2):
-        self.encoder_dev = self.register(EncoderInput(read, button_read, button))
-        return self.encoder_dev
-
-    def on(self, event_type, callback):
-        if isinstance(event_type, (list, tuple)):
-            for item in event_type:
-                self.on(item, callback)
-            return
-        callbacks = self._event_callbacks.setdefault(event_type, [])
-        if callback not in callbacks:
-            callbacks.append(callback)
-
-    def _dispatch_event(self, event, device):
-        if event.type == events.QUIT:
-            self.request_quit()
-        for callback in tuple(self._event_callbacks.get(event.type, ())):
-            callback(event)
-
-    def poll(self):
-        try:
-            from multimer import auto as timer
-
-            timer.pump()
-        except ImportError:
-            pass
-        result = []
-        for device in self.devices:
-            result.extend(device.poll())
-        return result
-
-    def _ensure_ticks(self):
-        if ticks_ms is None:
-            raise RuntimeError("multimer ticks helpers are required")
-
-    def _start_timer(self, asynchronous):
-        if self._timer is not None:
-            return self._timer
-        from multimer import AsyncTimer
-        from multimer import auto as timer
-
-        timer_type = AsyncTimer if asynchronous else timer.Timer
-        timer = None
-        error = None
-        for timer_id in (-1, 0, 1, 2, 3):
-            try:
-                timer = timer_type(timer_id)
-                break
-            except ValueError as exc:
-                error = exc
-        if timer is None:
-            raise error
-        self._timer = timer
-        timer.init(
-            mode=timer_type.PERIODIC,
-            period=LVGL_PERIOD_MS,
-            callback=self._dispatch_tick,
-            hard=False,
-        )
-        return timer
-
-    def _dispatch_tick(self, timer):
-        if self._in_tick or self._quit_requested:
-            return
-        self._in_tick = True
-        try:
-            now = ticks_ms()
-            for entry in tuple(self._tick_callbacks):
-                if ticks_diff(entry[2], now) > 0:
-                    continue
-                entry[2] = ticks_add(now, entry[1])
-                entry[0](timer)
-        finally:
-            self._in_tick = False
-        if self._quit_requested and not self._blocking:
-            self._defer_teardown()
-
-    def on_tick(self, callback, *, period, async_=False):
-        if not callable(callback):
-            raise ValueError("callback is not callable")
-        self._ensure_ticks()
-        if self._timer is None:
-            if async_ and not _asyncio_loop_running():
-                self._pending_timer_async = True
-            else:
-                self._start_timer(async_)
-        entry = [callback, int(period), ticks_add(ticks_ms(), int(period))]
-        self._tick_callbacks.append(entry)
-        return _TickSubscription(self, entry)
-
-    def stop_timer(self):
-        self._tick_callbacks = []
-        timer = self._timer
-        self._timer = None
-        self._pending_timer_async = False
-        if timer is not None:
-            timer.deinit()
-
-    def _arm_async(self):
-        inst = event_loop.current_instance()
-        if inst is not None:
-            inst.arm()
-        if self._pending_timer_async and self._timer is None:
-            self._start_timer(True)
-            self._pending_timer_async = False
-
-    async def run(self, tick_ms=LVGL_PERIOD_MS):
-        if asyncio is None:
-            raise RuntimeError("asyncio is not available")
-        self._arm_async()
-        self._blocking = True
-        self._blocking_run_forever = True  # harness / eventsys duck-typing parity
-        try:
-            while not self._quit_requested:
-                await asyncio.sleep(tick_ms / 1000)
-                try:
-                    from multimer import run_deadline_hook
-
-                    run_deadline_hook()
-                except ImportError:
-                    pass
-        finally:
-            self._blocking = False
-            self._blocking_run_forever = False
-            self._perform_teardown()
-        self._raise_exit_code()
-
-    def run_forever(self, tick_ms=LVGL_PERIOD_MS):
-        from multimer import auto as timer
-
-        if self._timer_async:
-            if _asyncio_loop_running():
-                self._arm_async()
-                return
-            if asyncio is None:
-                raise RuntimeError("asyncio is not available")
-            asyncio.run(self.run(tick_ms))
-            self._raise_exit_code()
-            return
-        if _interactive_session() and timer.uses_interrupts:
-            return
-        self._blocking = True
-        self._blocking_run_forever = True  # harness / eventsys duck-typing parity
-        try:
-            while not self._quit_requested:
-                timer.sleep_ms(tick_ms)
-        finally:
-            self._blocking = False
-            self._blocking_run_forever = False
-            self._perform_teardown()
-        self._raise_exit_code()
-
-    def run_async(self, coro_or_fn):
-        if asyncio is None:
-            raise RuntimeError("asyncio is not available")
-
-        async def runner():
-            self._arm_async()
-            coro = coro_or_fn() if callable(coro_or_fn) else coro_or_fn
-            return await coro
-
-        if _asyncio_loop_running():
-            return asyncio.create_task(runner())
-        return asyncio.run(runner())
-
-    def request_quit(self, code=None):
-        self._quit_requested = True
-        if code is not None:
-            self._exit_code = int(code)
-        if not self._in_tick and not self._blocking:
-            self._perform_teardown()
-
-    def _raise_exit_code(self):
-        if self._exit_code is None:
-            return
-        code = self._exit_code
-        self._exit_code = None
-        raise SystemExit(code)
-
-    def _defer_teardown(self):
-        if self._teardown_done or self._teardown_timer is not None:
-            return
-        from multimer import auto as timer
-
-        Timer = timer.Timer
-
-        helper = None
-        error = None
-        for timer_id in (-1, 0, 1, 2, 3):
-            try:
-                helper = Timer(timer_id)
-                break
-            except ValueError as exc:
-                error = exc
-        if helper is None:
-            raise error
-        self._teardown_timer = helper
-
-        def finish(_timer):
-            self._teardown_timer = None
-            self._perform_teardown()
-
-        helper.init(mode=Timer.ONE_SHOT, period=1, callback=finish, hard=False)
-
-    def _perform_teardown(self):
-        if self._teardown_done:
-            return
-        self._teardown_done = True
-        if self._before_quit is not None:
-            self._before_quit()
-        self.stop_timer()
-        for panel in tuple(self._displays):
-            close = getattr(panel, "quit", None) or getattr(panel, "deinit", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    pass
-        self._displays = []
-
-
-runtime = LVGLRuntime(board_config)
+app = appdev.App(board_config)
 
 
 def _asyncio_loop_running():
-    """True when an asyncio loop is already running (host loop or inside a task)."""
     if loop_running is None:
         return False
     return loop_running()
 
 
 class event_loop:
-    """LVGL task loop driven by ``LVGLRuntime.on_tick``.
+    """LVGL task loop driven by ``App.every``.
 
     One instance may be active at a time. Sync mode runs ``lv.task_handler``
     from the shared timer; async mode signals an asyncio refresh task.
@@ -933,19 +579,17 @@ class event_loop:
             self.refresh_event = asyncio.Event()
             if _asyncio_loop_running():
                 self.arm()
-        # Sync: defer ``on_tick`` until first ``enable()`` (see ``_arm_sync_timer``).
+        # Sync: defer ``every`` until first ``enable()`` (see ``_arm_sync_timer``).
 
     def _arm_sync_timer(self):
         """Subscribe the sync tick once; safe to call repeatedly."""
         if self.asynchronous:
             return
-        # runtime.stop_timer() deinits the HW timer and clears callbacks but
-        # does not notify us — drop a stale handle so we can re-subscribe.
         if self._timer_sub is not None:
-            if runtime._timer is not None:
+            if app._timer is not None:
                 return
             self._timer_sub = None
-        self._timer_sub = runtime.on_tick(self.timer_cb, period=self.delay, async_=False)
+        self._timer_sub = app.every(self.delay, self.timer_cb)
 
     def arm(self):
         """Create the async refresh task + shared timer once a loop is running.
@@ -956,12 +600,12 @@ class event_loop:
             return
         self._async_armed = True
         self.refresh_task = asyncio.create_task(self.async_refresh())
-        self._timer_sub = runtime.on_tick(self.timer_cb, period=self.delay, async_=True)
+        self._timer_sub = app.every(self.delay, self.timer_cb)
 
     def deinit(self):
         """Stop the tick subscription / async task and clear the singleton."""
         if getattr(self, "_timer_sub", None) is not None:
-            self._timer_sub.deinit()
+            self._timer_sub.cancel()
             self._timer_sub = None
         if self.asynchronous and self.refresh_task is not None:
             self.refresh_task.cancel()
@@ -1017,7 +661,7 @@ class event_loop:
         self.timer_cb(None)
 
     def run(self):
-        """Blocking forever-tick loop (macOS only; prefer ``runtime.run_forever()``)."""
+        """Blocking forever-tick loop (macOS only; prefer ``app.run()``)."""
         if sys.platform == "darwin":
             while True:
                 self.tick()
@@ -1041,7 +685,7 @@ class event_loop:
         Args:
             t: Timer instance (ignored; may be ``None`` from :meth:`tick`).
         """
-        # Called from the runtime's shared timer (on the main thread).
+        # Called from the app's shared timer (on the main thread).
         # In async mode the AsyncTimer fires from inside the running asyncio
         # loop, so we can safely arm (create the refresh task) on the first
         # tick -- no need for an external coordinator.
@@ -1102,7 +746,7 @@ def main():
         lv.init()
     # Never arm a timer before SPIRAM draw buffers exist. A soft-timer callback
     # during draw_buf_create can corrupt LVGL handlers on ESP32-P4.
-    runtime.stop_timer()
+    app.stop_timer()
     loop_inst = event_loop.current_instance()
     if loop_inst is not None:
         # Already-running loop: pause around driver (re)construction.
@@ -1111,21 +755,21 @@ def main():
         if lv.group_get_default() is None:
             lv.group_create().set_default()
 
-        devs = runtime.devices
+        devs = app.devices
         _driver_ref = DisplayDriver(
             display_drv,
             devs,
         )
         _drivers = [_driver_ref]
         # Start event_loop only after draw buffers exist (sync path defers
-        # on_tick until enable(); still construct after DisplayDriver so
+        # every() until enable(); still construct after DisplayDriver so
         # host_pump / service cannot arm the shared timer early).
         if loop_inst is None:
             # PARTIAL: present after every task_handler (blit already wrote the
             # panel FB). Shared DIRECT: present only from flush_is_last.
             loop_inst = event_loop(
                 period_ms=LVGL_PERIOD_MS,
-                asynchronous=runtime.timer_async,
+                asynchronous=app.timer_async,
                 refresh_cb=_present_lvgl_displays,
             )
         _ensure_host_pump()
@@ -1139,7 +783,7 @@ def main():
         global _host_pump_sub
         if _host_pump_sub is not None:
             try:
-                _host_pump_sub.deinit()
+                _host_pump_sub.cancel()
             except Exception:
                 pass
             _host_pump_sub = None
@@ -1152,20 +796,17 @@ def main():
         except Exception:
             pass
 
-    runtime.before_quit = _lvgl_shutdown_before_quit
+    app.before_quit = _lvgl_shutdown_before_quit
 
 
 def _ensure_host_pump():
-    """Keep HOST/SDL draining on the 10 ms Runtime tick for all drivers."""
+    """Keep HOST/SDL draining on the 10 ms App tick for all drivers."""
     global _host_pump_sub
-    if _host_pump_sub is not None and runtime._timer is not None:
+    if _host_pump_sub is not None and app._timer is not None:
         return
     if _host_pump_sub is not None:
-        # Either stop_timer() dropped every subscription, or the timer is an
-        # AsyncTimer still waiting for its loop. Drop our callback in the second
-        # case so re-subscribing cannot pump the host twice per tick.
         try:
-            _host_pump_sub.deinit()
+            _host_pump_sub.cancel()
         except Exception:
             pass
         _host_pump_sub = None
@@ -1175,13 +816,7 @@ def _ensure_host_pump():
             for vd in getattr(drv, "virtual_devices", ()):
                 vd.poll_host_device()
 
-    # Follow the runtime's timer mode. Forcing async_=False would create the
-    # shared *sync* timer whenever the pump subscribes first — which is what a
-    # module-scope ``import display_driver`` does under timer_async, locking the
-    # app out of AsyncTimer for the rest of the run.
-    _host_pump_sub = runtime.on_tick(
-        _host_pump, period=10, async_=runtime.timer_async
-    )
+    _host_pump_sub = app.every(10, _host_pump)
 
 
 def _present_lvgl_displays():
@@ -1212,12 +847,12 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
     """Attach an additional displaydev panel as an LVGL display.
 
     Call after ``import display_driver`` (primary already wired). The display
-    is also registered with this module's LVGL runtime.
+    is also registered with this module's LVGL app.
 
     Args:
         display: Secondary displaydev driver.
         devices: Optional LVGL input devices to bind as indevs on this display.
-            When omitted and ``runtime.host_dev`` exists, that host device is
+            When omitted and ``app.host_dev`` exists, that host device is
             reused (window-filtered) so the secondary panel receives pointer
             input.
         color_format: LVGL color format; default RGB565.
@@ -1231,9 +866,9 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
         raise RuntimeError("import display_driver before attach()")
     if devices is None:
         devices = []
-        if getattr(runtime, "host_dev", None) is not None:
-            devices = [runtime.host_dev]
-    runtime.add_display(display)
+        if getattr(app, "host_dev", None) is not None:
+            devices = [app.host_dev]
+    app.add_display(display)
     kwargs = {"devs": devices, "blocking": blocking}
     if color_format is not None:
         kwargs["color_format"] = color_format
@@ -1489,8 +1124,8 @@ def _gesture_feed(indev, data, device):
     data.point = lv.point_t({"x": st["x"], "y": st["y"]})
 
 
-def _encoder_cb(event, indev, data):
-    if event is None:
+def _encoder_cb(event, indev=None, data=None):
+    if event is None or data is None:
         return
     if event.type == events.MOUSEWHEEL:
         data.enc_diff = event.x if event.flipped is False else -event.x
@@ -1645,7 +1280,9 @@ def _make_keypad_cb(device):
     else:
         st.setdefault("mods", 0)
 
-    def _keypad_cb(event, indev, data):
+    def _keypad_cb(event, indev=None, data=None):
+        if data is None:
+            return
         if event is not None:
             bit = _modifier_bit(event)
             if bit:

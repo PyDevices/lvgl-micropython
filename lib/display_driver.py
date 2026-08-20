@@ -42,6 +42,7 @@ display_drv = board_config.display_drv
 
 import lvgl as lv
 
+import appdev
 import events
 import keys
 
@@ -494,8 +495,6 @@ class VirtualDevices:
         elif event.type in (events.KEYDOWN, events.KEYUP):
             self._vd_keypad.add_event(event)
 
-
-import appdev
 
 app = appdev.App(board_config)
 
@@ -1309,7 +1308,7 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
     """Register LVGL input devices as LVGL indevs (pointer / encoder / keypad).
 
     Args:
-        devs: Iterable of LVGL input devices from ``runtime.devices``.
+        devs: Iterable of LVGL input devices from ``app.devices``.
         lv_display: LVGL display object to attach indevs to.
         virtual_devices: Optional list mutated when expanding :class:`HostEventsDevice`
             into virtual pointer/keypad devices.

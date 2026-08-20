@@ -10,7 +10,7 @@ Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bi
 
 See [docs/](docs/index.md).
 
-This repo is mostly glue: it wires LVGL into MicroPython builds and exposes the runtime hooks that the firmware needs. In practice, you usually change the build glue or allocator here when the port itself changes, but you do not regenerate the bindings here. If the binding layer changed, update **`lvgl-bindings`** first and then rebuild this module against the new generated file.
+This repo is mostly glue: it wires LVGL into MicroPython builds and exposes the interpreter hooks that the firmware needs. In practice, you usually change the build glue or allocator here when the port itself changes, but you do not regenerate the bindings here. If the binding layer changed, update **`lvgl-bindings`** first and then rebuild this module against the new generated file.
 
 ## Workspace layout
 
@@ -69,11 +69,11 @@ make BOARD=ESP32_GENERIC_S3 \
 
 See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
 
-## Runtime Usage & Timer Model
+## App Usage & Timer Model
 
 In MicroPython, `display_driver` uses `machine.Timer` (hardware interrupts):
 - **Interactive REPL (`micropython -i` or on-board prompt)**: Simply create widgets and drop out to the prompt. Hardware timer interrupts keep LVGL animations, timers, and touch input running continuously in the background while you inspect variables or test code interactively.
-- **Standalone Scripts**: Use `runtime.run_forever()` if you need an explicit loop for non-interactive desktop scripts.
+- **Standalone Scripts**: Use `app.run()` if you need an explicit loop for non-interactive desktop scripts.
 
 ```python
 import display_driver  # noqa: F401 - initializes display, input, and machine.Timer

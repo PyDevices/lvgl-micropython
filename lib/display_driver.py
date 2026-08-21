@@ -661,11 +661,29 @@ class event_loop:
         return ticks_diff(self._next_ok_ms, ticks_ms()) <= 0
 
     def _arm_gate(self):
-        if ticks_ms is None or ticks_add is None:
+        """Open the next slot one period after the last one, not after the work.
+
+        Pacing from *completion* silently halved the tick rate: the next timer
+        tick arrives ``delay - work`` ms after the callback returns, always
+        inside a gate that only opened at ``completion + delay``, so every
+        second tick was rejected no matter how fast the work was (measured 50/s
+        on a 10 ms timer, ESP32-P4).
+
+        Advancing from the previous slot keeps the cadence for fast frames. The
+        backlog protection the old comment was after is still there: if a slow
+        flush overran its slot, resynchronise to now instead of letting the
+        queued ticks fire back-to-back to catch up.
+        """
+        if ticks_ms is None or ticks_add is None or ticks_diff is None:
             return
-        # Pace from completion so a slow flush cannot be immediately followed
-        # by another (RT-signal backlog under micropython -i).
-        self._next_ok_ms = ticks_add(ticks_ms(), self.delay)
+        now = ticks_ms()
+        if self._next_ok_ms is None:
+            self._next_ok_ms = ticks_add(now, self.delay)
+            return
+        nxt = ticks_add(self._next_ok_ms, self.delay)
+        if ticks_diff(nxt, now) < 0:
+            nxt = now
+        self._next_ok_ms = nxt
 
     def timer_cb(self, t):
         """Shared-timer callback: advance LVGL time and run/signal task handling.

@@ -10,6 +10,11 @@ Canonical copy lives in PyDevices/lvgl-bindings (``python/display_driver.py``).
 Consumer repos (lvgl-micropython, lvgl-circuitpython, lvgl-python)
 vendor a synced copy; do not edit those copies directly.
 
+Note that a change here is a release trigger: this path is watched by
+``.github/workflows/trigger-lvgl-python-release.yml``, which dispatches
+lvgl-python's sync, and that publishes a new version when the sync produces a
+diff. Even a comment-only edit ships a release.
+
 Requires a valid ``board_config.py`` on the path. Importing this module creates
 an ``appdev.App`` coordinator, starts ``event_loop``, and registers display flush
 and input devices.
@@ -21,9 +26,10 @@ changes:
 * ``asyncio`` from ``multimer``.
 * Sync path runs ``lv.task_handler()`` from the tick callback (re-entrancy
   guarded); the app timer delivers on the main thread.
-* Async mode arms the refresh task lazily on the first timer tick so module-top
+* Async mode arms the refresh task via ``appdev.App.on_start``, so module-top
   ``import display_driver`` is safe before any event loop exists.
-* Application lifecycle driven by ``appdev.App.run()``.
+* Application lifecycle owned by ``appdev.App``: it keeps itself alive past the
+  end of the script body, so a trailing ``app.run()`` is optional.
 
 Interactive desktop (librt + REPL): ``task_handler`` / indev reads are paced at
 ``LVGL_PERIOD_MS`` (10 ms) with a wall-clock gate. Display refresh stays at
@@ -47,10 +53,9 @@ import events
 import keys
 
 try:
-    from multimer import asyncio, loop_running, ticks_add, ticks_diff, ticks_ms
+    from multimer import asyncio, ticks_add, ticks_diff, ticks_ms
 except ImportError:
     asyncio = None
-    loop_running = None
     ticks_add = None
     ticks_diff = None
     ticks_ms = None
@@ -499,12 +504,6 @@ class VirtualDevices:
 app = appdev.App(board_config)
 
 
-def _asyncio_loop_running():
-    if loop_running is None:
-        return False
-    return loop_running()
-
-
 class event_loop:
     """LVGL task loop driven by ``App.every``.
 
@@ -576,8 +575,9 @@ class event_loop:
             if not asyncio_available:
                 raise RuntimeError("Cannot run asynchronous event loop. asyncio is not available!")
             self.refresh_event = asyncio.Event()
-            if _asyncio_loop_running():
-                self.arm()
+            # ``App`` owns the "the loop is running now" moment; ask to be
+            # armed then. Runs immediately if a loop is already running.
+            app.on_start(self.arm)
         # Sync: defer ``every`` until first ``enable()`` (see ``_arm_sync_timer``).
 
     def _arm_sync_timer(self):
@@ -623,11 +623,6 @@ class event_loop:
             self._pause -= 1
         if self._pause == 0:
             self._arm_sync_timer()
-            # Async path: arm refresh task + timer_cb if import-time construction
-            # could not (MicroPython lacks get_running_loop; UI builders that
-            # disable()/enable() around layout also land here).
-            if self.asynchronous and not self._async_armed and _asyncio_loop_running():
-                self.arm()
 
     @staticmethod
     def is_running():
@@ -659,12 +654,6 @@ class event_loop:
         """Manually invoke the timer callback once (same path as the shared timer)."""
         self.timer_cb(None)
 
-    def run(self):
-        """Blocking forever-tick loop (macOS only; prefer ``app.run()``)."""
-        if sys.platform == "darwin":
-            while True:
-                self.tick()
-
     def _gate_allows(self):
         if ticks_ms is None or self._next_ok_ms is None:
             return True
@@ -684,12 +673,8 @@ class event_loop:
         Args:
             t: Timer instance (ignored; may be ``None`` from :meth:`tick`).
         """
-        # Called from the app's shared timer (on the main thread).
-        # In async mode the AsyncTimer fires from inside the running asyncio
-        # loop, so we can safely arm (create the refresh task) on the first
-        # tick -- no need for an external coordinator.
-        if self.asynchronous and not self._async_armed:
-            self.arm()
+        # Called from the app's shared timer (on the main thread). Arming is
+        # handled by ``app.on_start`` in __init__, not opportunistically here.
         # Advance LVGL time by real elapsed ms. The present-frame gate may
         # skip task_handler when show()/flush is slow (mipidsi ~30ms); if we
         # also skipped tick_inc there, timers ran at ~half wall-clock speed.

@@ -866,6 +866,7 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
     global _drivers
     if not lv.is_initialized():
         raise RuntimeError("import display_driver before attach()")
+    prev_default = lv.display_get_default() if hasattr(lv, "display_get_default") else None
     if devices is None:
         devices = []
         if getattr(app, "host_dev", None) is not None:
@@ -880,6 +881,8 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
     if loop_inst is not None:
         loop_inst.refresh_cb = _present_lvgl_displays
     _ensure_host_pump()
+    if prev_default is not None and hasattr(prev_default, "set_default"):
+        prev_default.set_default()
     return drv
 
 

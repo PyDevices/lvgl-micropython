@@ -15,9 +15,10 @@ Note that a change here is a release trigger: this path is watched by
 lvgl-python's sync, and that publishes a new version when the sync produces a
 diff. Even a comment-only edit ships a release.
 
-Requires a valid ``board_config.py`` on the path. Importing this module creates
-an ``appdev.App`` coordinator, starts ``event_loop``, and registers display flush
-and input devices.
+Importing this module uses the active :class:`appdev.App` when the application
+has already constructed one explicitly. For compatibility, it falls back to
+creating an app from ``board_config`` when no active app exists. The selected
+coordinator starts ``event_loop`` and registers display flush and input devices.
 
 ``event_loop`` was adapted from upstream lv_utils (Amir Gonnen). Integration
 changes:
@@ -42,15 +43,21 @@ the window cannot stall while LVGL is paused or slow.
 import gc
 import sys
 
-import board_config
-
-display_drv = board_config.display_drv
-
 import lvgl as lv
 
 import appdev
 import events
 import keys
+
+app = appdev.App.current()
+if app is None:
+    import board_config
+
+    app = appdev.App(board_config)
+
+display_drv = app.primary
+if display_drv is None:
+    raise RuntimeError("display_driver requires an appdev.App with a display")
 
 try:
     from multimer import asyncio, ticks_add, ticks_diff, ticks_ms
@@ -501,9 +508,6 @@ class VirtualDevices:
             self._vd_keypad.add_event(event)
 
 
-app = appdev.App(board_config)
-
-
 class event_loop:
     """LVGL task loop driven by ``App.every``.
 
@@ -739,8 +743,8 @@ class event_loop:
 def main():
     """Initialize LVGL, wire :class:`DisplayDriver`, and enable the event loop.
 
-    Called automatically on ``import display_driver`` when ``board_config``
-    provides ``display_drv`` and optional neutral input callables.
+    Called automatically on ``import display_driver`` using the active
+    :class:`appdev.App`, or the legacy ``board_config`` fallback.
     """
     global _driver_ref, _drivers, _host_pump_sub
     gc.collect()

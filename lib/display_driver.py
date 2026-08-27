@@ -383,6 +383,31 @@ class VirtualDevices:
 
         def add_event(self, event):
             if (
+                event.type == events.MOUSEWHEEL
+                and self._fifo
+                and self._fifo[-1].type == events.MOUSEWHEEL
+            ):
+                # Sum, don't replace: unlike a motion sample (only the latest
+                # position matters), every wheel delta has to count toward
+                # the total scroll distance. Some backends (WinDisplay,
+                # confirmed) emit far more wheel messages per physical
+                # gesture than others (SDL) - without this, a fast scroll
+                # queues faster than the "keep calling me until empty"
+                # read-cycle mechanism can drain one at a time, and the
+                # window stops responding for as long as scrolling continues.
+                last = self._fifo[-1]
+                self._fifo[-1] = events.Wheel(
+                    event.type,
+                    event.flipped,
+                    last.x + event.x,
+                    last.y + event.y,
+                    last.precise_x + event.precise_x,
+                    last.precise_y + event.precise_y,
+                    event.touch,
+                    event.window,
+                )
+                return
+            if (
                 event.type == events.MOUSEMOTION
                 and self._fifo
                 and self._fifo[-1].type == events.MOUSEMOTION
@@ -432,6 +457,10 @@ class VirtualDevices:
     def __init__(self, host_device, window_id=None):
         self._host_device = host_device
         self._window_id = window_id
+        # For QUIT below: the app that owns this HOST device (App.add_device
+        # sets dev.app = self on every device it registers), so a window
+        # close reaches the same app.request_quit() a script calls by hand.
+        self._app = getattr(host_device, "app", None)
         self._vd_pointer = self.VirtualDevice(self, POINTER)
         self._vd_encoder = self.VirtualDevice(self, ENCODER)
         self._vd_keypad = self.VirtualDevice(self, KEYPAD)
@@ -504,8 +533,18 @@ class VirtualDevices:
                 self._vd_pointer.add_event(event)
         elif event.type == events.MOUSEWHEEL:
             self._vd_encoder.add_event(event)
+            _wheel_navigate_cb(event)
         elif event.type in (events.KEYDOWN, events.KEYUP):
             self._vd_keypad.add_event(event)
+        elif event.type == events.QUIT:
+            # Window-close reaches here (e.g. windisplay.WinDisplay's
+            # WM_CLOSE handler queues one) but nothing previously acted on
+            # it: every LVGL indev is polled straight from LVGL's own read
+            # timer, not from App.poll()'s loop, so App's own QUIT handling
+            # never saw it — the event was silently dropped and the window
+            # could not be closed at all.
+            if self._app is not None:
+                self._app.request_quit()
 
 
 class event_loop:
@@ -1133,15 +1172,133 @@ def _gesture_feed(indev, data, device):
     data.point = lv.point_t({"x": st["x"], "y": st["y"]})
 
 
+# A wheel event carries a legacy integer x/y pair and a float
+# precise_x/precise_y pair, and which pair holds real data is a per-build
+# fact about usdl2 (verified empirically 2026-08-27, WSLg): the desktop
+# MicroPython build labels both axes correctly only in precise_* (a pure
+# vertical swipe *also* sets a spurious legacy x), while the CPython wheel
+# build has usable legacy fields but garbles precise_* into float32
+# reinterpretations of small ints — denormals around 1e-45. The epsilon
+# guard below rejects that garbage, so one rule serves both: use precise
+# when it carries sane data, else fall back to legacy, and never mix the
+# pairs within one event (per-channel mixing double-counts the mislabeled
+# builds). On the legacy path the primary scroll arrives on x — the field
+# this callback has always read.
+_WHEEL_EPSILON = 1e-3
+
+# App-configurable mapping, see set_wheel_mapping(). Defaults preserve the
+# historical behavior exactly: the primary axis adjusts, nothing navigates.
+_wheel_adjust_axis = "v"
+_wheel_adjust_sign = 1
+_wheel_navigate_sign = 1
+_wheel_navigates = False
+_wheel_adjust_accum = 0.0
+_wheel_navigate_accum = 0.0
+
+
+def set_wheel_mapping(adjust_axis=None, adjust_sign=None, navigate=None, navigate_sign=None):
+    """Configure how the two wheel/swipe axes map onto LVGL.
+
+    ``adjust_axis``: "v" (default) or "h" — which axis drives the encoder
+    indev, i.e. adjusts the focused control's value. Pick the axis running
+    parallel to the control's orientation: horizontal sliders read best
+    with ``"h"``, vertical sliders and knobs with ``"v"``.
+    ``adjust_sign``: 1 or -1 to flip the adjust direction.
+    ``navigate``: when True, the *other* axis moves group focus between
+    controls (``lv.group_t.focus_next``/``focus_prev`` on the default
+    group), giving wheel-only browse-and-tweak. When False (default) the
+    secondary axis is used only as a fallback when the primary is silent,
+    which keeps single-axis sources such as hardware encoders working
+    regardless of which field they populate.
+    ``navigate_sign``: 1 or -1 to flip which way focus travels. Needed
+    independently of ``adjust_sign`` because the two axes come from
+    different sources with their own conventions -- SDL and Win32 disagree
+    about the sign of vertical scroll, and "swipe down goes to the next
+    control" is a claim about that axis alone.
+    """
+    global _wheel_adjust_axis, _wheel_adjust_sign, _wheel_navigates
+    global _wheel_navigate_sign
+    if adjust_axis is not None:
+        if adjust_axis not in ("v", "h"):
+            raise ValueError("adjust_axis must be 'v' or 'h'")
+        _wheel_adjust_axis = adjust_axis
+    if adjust_sign is not None:
+        _wheel_adjust_sign = 1 if adjust_sign >= 0 else -1
+    if navigate is not None:
+        _wheel_navigates = bool(navigate)
+    if navigate_sign is not None:
+        _wheel_navigate_sign = 1 if navigate_sign >= 0 else -1
+
+
+def _wheel_axes(event):
+    """Resolve one MOUSEWHEEL event to (horizontal, vertical) deltas."""
+    px, py = event.precise_x, event.precise_y
+    if -_WHEEL_EPSILON < px < _WHEEL_EPSILON:
+        px = 0.0
+    if -_WHEEL_EPSILON < py < _WHEEL_EPSILON:
+        py = 0.0
+    if px or py:
+        h, v = px, py
+    else:
+        v, h = event.x, event.y
+    if event.flipped:
+        h, v = -h, -v
+    return h, v
+
+
+def _wheel_split(event):
+    """Return (adjust_delta, navigate_delta) per the configured mapping."""
+    h, v = _wheel_axes(event)
+    adjust, other = (v, h) if _wheel_adjust_axis == "v" else (h, v)
+    if not _wheel_navigates and adjust == 0:
+        adjust, other = other, 0.0
+    if not _wheel_navigates:
+        return adjust * _wheel_adjust_sign, 0.0
+    return adjust * _wheel_adjust_sign, other * _wheel_navigate_sign
+
+
 def _encoder_cb(event, indev=None, data=None):
+    global _wheel_adjust_accum
     if event is None or data is None:
         return
     if event.type == events.MOUSEWHEEL:
-        data.enc_diff = event.x if event.flipped is False else -event.x
+        adjust, _ = _wheel_split(event)
+        _wheel_adjust_accum += adjust
+        steps = int(_wheel_adjust_accum)
+        _wheel_adjust_accum -= steps
+        data.enc_diff = steps
     elif event.type == events.MOUSEBUTTONDOWN and event.button == 3:
         data.state = lv.INDEV_STATE.PRESSED
     elif event.type == events.MOUSEBUTTONUP and event.button == 3:
         data.state = lv.INDEV_STATE.RELEASED
+
+
+def _wheel_navigate_cb(event):
+    """Move default-group focus with the non-adjust axis (opt-in).
+
+    Calls the group API directly rather than adding a second encoder
+    indev: ``focus_next``/``focus_prev`` send FOCUSED/DEFOCUSED but never
+    touch the group's editing flag, so the control landed on keeps
+    whatever edit state its own FOCUSED handler establishes and the
+    adjust axis acts on it immediately.
+    """
+    global _wheel_navigate_accum
+    if not _wheel_navigates:
+        return
+    _, navigate = _wheel_split(event)
+    _wheel_navigate_accum += navigate
+    steps = int(_wheel_navigate_accum)
+    _wheel_navigate_accum -= steps
+    if not steps:
+        return
+    g = lv.group_get_default()
+    if g is None:
+        return
+    for _ in range(abs(steps)):
+        if steps > 0:
+            g.focus_next()
+        else:
+            g.focus_prev()
 
 
 # US QWERTY unshifted → shifted printable (SDL often reports base key + KMOD_SHIFT).

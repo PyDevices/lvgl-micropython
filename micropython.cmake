@@ -38,7 +38,7 @@ list(FILTER SOURCES EXCLUDE REGEX "/src/draw/opengles/")
 list(APPEND SOURCES ${LVMP_DIR}/src/lv_mem_core_micropython.c)
 
 if(NOT EXISTS ${LVMP_C})
-    message(FATAL_ERROR "${LVMP_C} not found. Run ${BINDINGS_DIR}/regenerate_lvmp.sh after changing lvgl, lv_conf.h, or binding/")
+    message(FATAL_ERROR "${LVMP_C} not found. Sync an exact lvgl-bindings commit or release tag")
 endif()
 
 add_library(lv_micropython INTERFACE)

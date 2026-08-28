@@ -50,7 +50,7 @@ endif
 
 SOURCES += $(LVMP_DIR)/src/lv_mem_core_micropython.c
 
-$(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Run $(BINDINGS_DIR)/regenerate_lvmp.sh after changing lvgl, lv_conf.h, or binding/))
+$(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Sync an exact lvgl-bindings commit or release tag))
 
 # -Wno-unused-function here is not enough on ports that append -Werror after py.mk
 # (e.g. webassembly); those ports add -Wno-unused-function after -Werror too.

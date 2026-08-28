@@ -16,6 +16,7 @@ def test_make_and_cmake_builds_enforce_the_pin():
     for text in (make, cmake):
         assert "LVGL_BINDINGS_COMMIT" in text
         assert "generated/lvgl_micropython.c" in text
+        assert "regenerate_lvmp.sh" not in text
 
 
 def test_no_consumer_smoke_wrapper_remains():

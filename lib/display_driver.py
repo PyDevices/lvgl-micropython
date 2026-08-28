@@ -10,10 +10,8 @@ Canonical copy lives in PyDevices/lvgl-bindings (``python/display_driver.py``).
 Consumer repos (lvgl-micropython, lvgl-circuitpython, lvgl-python)
 vendor a synced copy; do not edit those copies directly.
 
-Note that a change here is a release trigger: this path is watched by
-``.github/workflows/trigger-lvgl-python-release.yml``, which dispatches
-lvgl-python's sync, and that publishes a new version when the sync produces a
-diff. Even a comment-only edit ships a release.
+Changes here are released only through the explicit bindings release workflow.
+Consumers sync an exact bindings commit or immutable release tag.
 
 Importing this module uses the active :class:`appdev.App` when the application
 has already constructed one explicitly. For compatibility, it falls back to

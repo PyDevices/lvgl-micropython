@@ -16,6 +16,19 @@ set(LVMP_C ${BINDINGS_DIR}/generated/lvgl_micropython.c)
 set(LVGL_DIR ${BINDINGS_DIR}/lvgl)
 file(GLOB_RECURSE SOURCES ${LVGL_DIR}/src/*.c)
 
+file(STRINGS ${LVMP_DIR}/LVGL_BINDINGS_COMMIT LV_BINDINGS_PIN LIMIT_COUNT 1)
+execute_process(
+    COMMAND git -C ${BINDINGS_DIR} diff --quiet ${LV_BINDINGS_PIN} -- generated/lvgl_micropython.c lvgl lv_conf.h
+    RESULT_VARIABLE LV_BINDINGS_COMMITTED_DIFF
+)
+execute_process(
+    COMMAND git -C ${BINDINGS_DIR} diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h
+    RESULT_VARIABLE LV_BINDINGS_WORKTREE_DIFF
+)
+if(NOT LV_BINDINGS_COMMITTED_DIFF EQUAL 0 OR NOT LV_BINDINGS_WORKTREE_DIFF EQUAL 0)
+    message(FATAL_ERROR "${BINDINGS_DIR} does not match pinned binding inputs ${LV_BINDINGS_PIN}")
+endif()
+
 # LVGL is available on every port, but its desktop/host-GUI and OS-specific
 # driver backends plus the OpenGLES draw unit need host libraries and break the
 # build. CMake ports here (esp32/rp2) are embedded, so drop those backends. This

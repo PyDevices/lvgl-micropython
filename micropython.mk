@@ -9,6 +9,18 @@ BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lvgl-bindings)
 LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")
+LV_BINDINGS_PIN := $(strip $(shell cat $(LVMP_DIR)/LVGL_BINDINGS_COMMIT 2>/dev/null))
+LV_BINDINGS_DIRTY := $(shell \
+	git -C $(BINDINGS_DIR) cat-file -e $(LV_BINDINGS_PIN)^{commit} 2>/dev/null && \
+	git -C $(BINDINGS_DIR) diff --quiet $(LV_BINDINGS_PIN) -- generated/lvgl_micropython.c lvgl lv_conf.h && \
+	git -C $(BINDINGS_DIR) diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h || echo 1)
+
+ifeq ($(LV_BINDINGS_PIN),)
+$(error Missing $(LVMP_DIR)/LVGL_BINDINGS_COMMIT)
+endif
+ifneq ($(LV_BINDINGS_DIRTY),)
+$(error $(BINDINGS_DIR) does not match pinned binding inputs $(LV_BINDINGS_PIN); check out that commit/tag or run scripts/sync_from_lvgl_bindings.sh with an exact ref)
+endif
 
 # LVGL is available on every port, but its desktop/host-GUI and OS-specific
 # driver backends (OpenGL/SDL/GLFW/X11/Wayland/evdev/libinput/qnx/uefi/nuttx/

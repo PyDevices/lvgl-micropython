@@ -15,7 +15,7 @@ This repo does **not** regenerate bindings. It consumes
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
 | `docs/` | This documentation |
-| `tools/test_lvgl_unix.py` | Deprecated smoke wrapper → `lvgl-bindings/tools/test_lvgl_smoke.py` |
+| `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source required by Make and CMake |
 
 ## Build
 
@@ -29,6 +29,13 @@ make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.
 CMake ports (esp32, rp2): point `USER_C_MODULES` at **this repo**.
 
 See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
+
+Sync only from an immutable source:
+
+```bash
+./scripts/sync_from_lvgl_bindings.sh --ref <40-character-commit-sha>
+# or: --ref v9.5.N
+```
 
 ## Smoke (developer)
 

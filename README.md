@@ -4,7 +4,7 @@ MicroPython user C module glue for LVGL: `micropython.mk`, CMake usermod, GC-awa
 
 This repo is a consumer/build repo for the LVGL stack: it consumes generated bindings from lvgl-bindings and rebuilds MicroPython targets, but does not publish its own package. See [lvgl-bindings — The LVGL family](https://github.com/PyDevices/lvgl-bindings#the-lvgl-family) for how the family fits together.
 
-Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) with `generated/lvgl_micropython.c` (run `regenerate_lvmp.sh`).
+Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) whose generated binding inputs match the exact commit recorded in `LVGL_BINDINGS_COMMIT`. The Make and CMake integrations reject a mismatched source, LVGL pin, or configuration.
 
 ## Documentation
 
@@ -27,18 +27,31 @@ workspace/
 cd lvgl-bindings
 git submodule update --init lvgl
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-./regenerate_lvmp.sh
+./regenerate_all.sh --target micropython
 ```
 
-## Build (Make ports)
+## Build with cmods
+
+The supported multi-port entry point is the sibling [cmods](https://github.com/PyDevices/cmods) workspace:
+
+```bash
+cd ../cmods
+./build_mp.sh --port unix --variant standard
+./build_mp.sh --port windows --variant dev
+./build_mp.sh --port webassembly --variant pydevices
+./build_mp.sh --port esp32 --board ESP32_GENERIC_S3 --variant SPIRAM_OCT
+```
+
+Those commands cover Unix, Windows, WebAssembly, and MCU user-C-module builds without consumer-specific build wrappers.
+
+## Direct Make builds
 
 `USER_C_MODULES` is the **workspace parent** (directory containing this repo and any other `*/micropython.mk` siblings):
 
 ```bash
 cd micropython/ports/unix
-# Optional: freeze display_driver.py from this repo. To also keep the port's
-# default frozen modules, write a small wrapper that include()s this manifest
-# and the port/variant manifest.py.
+# Optional: freeze helpers through the cmods aggregate manifest, which also
+# preserves the selected port/variant's upstream frozen modules.
 make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.py
 ```
 
@@ -91,10 +104,10 @@ label.set_text("Hello MicroPython LVGL!")
 ## Smoke test
 
 ```bash
-./micropython/ports/unix/build-standard/micropython ./lvgl-micropython/tools/test_lvgl_unix.py
+./micropython/ports/unix/build-standard/micropython ./lvgl-bindings/tools/test_lvgl_smoke.py
 ```
 
-Prefer the unified smoke test directly: `lvgl-bindings/tools/test_lvgl_smoke.py`.
+The smoke suite belongs to the exact pinned `lvgl-bindings` source; this repo does not forward or duplicate it.
 
 ## Files
 
@@ -105,8 +118,7 @@ Prefer the unified smoke test directly: `lvgl-bindings/tools/test_lvgl_smoke.py`
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Freezes `lib/display_driver.py` (sync from lvgl-bindings) |
 | `lib/display_driver.py` | Vendored PyDevices LVGL glue (`import display_driver`) |
-| `scripts/sync_from_lvgl_bindings.sh` | Refresh `lib/display_driver.py` from lvgl-bindings |
-| `tools/test_lvgl_unix.py` | Deprecated wrapper → `lvgl-bindings/tools/test_lvgl_smoke.py` |
+| `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source consumed by builds |
+| `scripts/sync_from_lvgl_bindings.sh` | Refresh helpers and record an exact commit/tag |
 
 CircuitPython integration lives in [lvgl-circuitpython](https://github.com/PyDevices/lvgl-circuitpython).
-

@@ -43,6 +43,13 @@ import sys
 
 import lvgl as lv
 
+# The binding-internal callback re-entrancy counter. MicroPython and
+# CircuitPython export it (an audited exception to the canonical model) and
+# the sync task-handler gates on it. CPython deliberately does not export it
+# - re-entrancy is guarded in C with a ContextVar-scoped counter - so there
+# the Python-side gate simply stands down.
+_LV_NESTING = getattr(lv, "_nesting", None)
+
 import appdev
 import events
 import keys
@@ -681,7 +688,7 @@ class event_loop:
             return
         self._in_task = True
         try:
-            if lv._nesting.value == 0:
+            if _LV_NESTING is None or _LV_NESTING.value == 0:
                 lv.task_handler()
                 if self.refresh_cb:
                     self.refresh_cb()
@@ -761,7 +768,7 @@ class event_loop:
         """Asyncio task body: wait for refresh signals and run ``lv.task_handler``."""
         while True:
             await self.refresh_event.wait()
-            if lv._nesting.value == 0:
+            if _LV_NESTING is None or _LV_NESTING.value == 0:
                 self.refresh_event.clear()
                 try:
                     lv.task_handler()
@@ -774,7 +781,12 @@ class event_loop:
 
     def default_exception_sink(self, e):
         """Print ``e`` with traceback to stderr (default :attr:`exception_sink`)."""
-        sys.print_exception(e)
+        if hasattr(sys, "print_exception"):  # MicroPython / CircuitPython
+            sys.print_exception(e)
+        else:  # CPython has no sys.print_exception
+            import traceback
+
+            traceback.print_exception(type(e), e, e.__traceback__)
 
 
 def main():

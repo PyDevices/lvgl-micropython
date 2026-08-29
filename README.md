@@ -6,6 +6,8 @@ This repo is a consumer/build repo for the LVGL stack: it consumes generated bin
 
 Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) whose generated binding inputs match the exact commit recorded in `LVGL_BINDINGS_COMMIT`. The Make and CMake integrations reject a mismatched source, LVGL pin, or configuration.
 
+**Synced from lvgl-bindings:** `lib/display_driver.py` and `lib/fs_driver.py` are synced from [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) at the commit pinned in `LVGL_BINDINGS_COMMIT`, along with the generated bindings. Do not edit them here — change them in lvgl-bindings and re-sync.
+
 ## Documentation
 
 See [docs/](docs/index.md).

@@ -32,23 +32,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./regenerate_all.sh --target micropython
 ```
 
-## Build with cmods
-
-The supported multi-port entry point is the sibling [cmods](https://github.com/PyDevices/cmods) workspace:
-
-```bash
-cd ../cmods
-./build_mp.sh --port unix --variant standard
-./build_mp.sh --port windows --variant dev
-./build_mp.sh --port webassembly --variant pydevices
-./build_mp.sh --port esp32 --board ESP32_GENERIC_S3 --variant SPIRAM_OCT
-```
-
-Those commands cover Unix, Windows, WebAssembly, and MCU user-C-module builds without consumer-specific build wrappers.
-
 ## Direct Make builds
 
-`USER_C_MODULES` is the **workspace parent** (directory containing this repo and any other `*/micropython.mk` siblings):
+This repo builds standalone with plain `make` and `USER_C_MODULES` — no other workspace repo is required. `USER_C_MODULES` is the **workspace parent** (directory containing this repo and any other `*/micropython.mk` siblings):
 
 ```bash
 cd micropython/ports/unix
@@ -82,7 +68,19 @@ make BOARD=ESP32_GENERIC_S3 \
   USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
 ```
 
-See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
+## Build with cmods (optional convenience)
+
+For building several user C modules together across many ports, the sibling [cmods](https://github.com/PyDevices/cmods) workspace wraps the Make/CMake invocations above into one entry point — convenient, not required:
+
+```bash
+cd ../cmods
+./build_mp.sh --port unix --variant standard
+./build_mp.sh --port windows --variant dev
+./build_mp.sh --port webassembly --variant pydevices
+./build_mp.sh --port esp32 --board ESP32_GENERIC_S3 --variant SPIRAM_OCT
+```
+
+Those commands cover Unix, Windows, WebAssembly, and MCU user-C-module builds without hand-assembling `USER_C_MODULES` lists yourself.
 
 ## App Usage & Timer Model
 

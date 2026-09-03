@@ -38,8 +38,9 @@ This repo builds standalone with plain `make` and `USER_C_MODULES` — no other 
 
 ```bash
 cd micropython/ports/unix
-# Optional: freeze helpers through the cmods aggregate manifest, which also
-# preserves the selected port/variant's upstream frozen modules.
+# Optional: freeze this repo's Python helpers via manifest.py. Setting
+# FROZEN_MANIFEST replaces the port/variant's default manifest, so its upstream
+# frozen modules are omitted unless you wrap manifest.py in your own manifest.
 make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.py
 ```
 
@@ -68,9 +69,9 @@ make BOARD=ESP32_GENERIC_S3 \
   USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
 ```
 
-## Build with cmods (optional convenience)
+## Build with the org's aggregator workspace (optional)
 
-For building several user C modules together across many ports, the sibling [cmods](https://github.com/PyDevices/cmods) workspace wraps the Make/CMake invocations above into one entry point — convenient, not required:
+For building several user C modules together across many ports, the sibling [aggregator workspace](https://github.com/PyDevices/cmods) wraps the Make/CMake invocations above into one entry point — convenient, not required:
 
 ```bash
 cd ../cmods

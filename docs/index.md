@@ -28,7 +28,7 @@ make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.
 
 CMake ports (esp32, rp2): point `USER_C_MODULES` at **this repo**.
 
-See the [cmods workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
+See the org's [aggregator workspace](https://github.com/PyDevices/cmods) for an easier way to build this repo with other user C modules.
 
 Sync only from an immutable source:
 

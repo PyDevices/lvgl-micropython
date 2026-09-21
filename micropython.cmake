@@ -41,6 +41,19 @@ if(NOT EXISTS ${LVMP_C})
     message(FATAL_ERROR "${LVMP_C} not found. Sync an exact lvgl-bindings commit or release tag")
 endif()
 
+# jpegio Phase 2 moved the JPEG decoder out of LVGL: LV_USE_TJPGD is 0 in the
+# bindings (lvgl-bindings aa6c6bc), and displayif's jpegio registers its own
+# TJpgDec with LVGL instead, so a firmware carries one decoder rather than two.
+# Built without displayif, this module therefore decodes PNG and LVGL's BIN and
+# draws nothing at all for a JPEG -- silently, at run time. Say so at build
+# time instead (#11).
+if(NOT "${USER_C_MODULES}" MATCHES "displayif" AND NOT EXISTS ${WORKSPACE_DIR}/displayif)
+    message(NOTICE
+        "lvgl-micropython: no displayif in this build -- lv.image will not draw "
+        "a JPEG. displayif owns the TJpgDec decoder since jpegio Phase 2; PNG "
+        "and LVGL BIN still decode. Add displayif to USER_C_MODULES for JPEG.")
+endif()
+
 add_library(lv_micropython INTERFACE)
 target_sources(lv_micropython INTERFACE ${LVMP_C})
 target_include_directories(lv_micropython INTERFACE ${BINDINGS_DIR} ${LVMP_DIR})

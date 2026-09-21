@@ -69,6 +69,31 @@ make BOARD=ESP32_GENERIC_S3 \
   USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
 ```
 
+## JPEG images need displayif
+
+`lv.image` draws PNG and LVGL's own BIN format on any build of this module. It
+draws **nothing at all** for a JPEG unless
+[displayif](https://github.com/PyDevices/displayif) is in the same firmware.
+
+The decoder moved. `LV_USE_TJPGD` is 0 in the bindings, so LVGL's built-in
+JPEG decoder is not compiled in; displayif's `jpegio` registers its own TJpgDec
+with LVGL through `lv_image_decoder_create` when the two usermods are built
+together. The point was one TJpgDec per firmware instead of two, without
+carrying a fork of LVGL — but it means a build of this module alone silently
+skips JPEGs at run time rather than failing at build time.
+
+So add displayif when you want JPEG:
+
+```bash
+make BOARD=ESP32_GENERIC_S3 \
+  USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
+```
+
+Both build files print a note when they cannot see displayif, so you are told
+at build time rather than finding out from a blank image. From the displayif
+side, `jpegio.register_lvgl_decoder()` and `jpegio.lvgl_decoders()` exist on
+every build and report what happened.
+
 ## Build with the org's aggregator workspace (optional)
 
 For building several user C modules together across many ports, the sibling [aggregator workspace](https://github.com/PyDevices/cmods) wraps the Make/CMake invocations above into one entry point — convenient, not required:

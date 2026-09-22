@@ -55,7 +55,20 @@ if(NOT "${USER_C_MODULES}" MATCHES "displayif" AND NOT EXISTS ${WORKSPACE_DIR}/d
 endif()
 
 add_library(lv_micropython INTERFACE)
-target_sources(lv_micropython INTERFACE ${LVMP_C})
+target_sources(lv_micropython INTERFACE ${LVMP_C} ${LVMP_DIR}/src/lvgl_micropython_build.c)
+
+# --- which lvmp this firmware was built from ----------------------
+# Computed at build time from this repo's own git, never stored; "unknown" when
+# there is no git (a tarball). Read on a target as <module>.__revision__.
+execute_process(
+    COMMAND git -C ${LVMP_DIR} describe --always --dirty --abbrev=7
+    OUTPUT_VARIABLE LVMP_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT LVMP_REVISION)
+    set(LVMP_REVISION "unknown")
+endif()
+target_compile_definitions(lv_micropython INTERFACE LVMP_REVISION=\"${LVMP_REVISION}\")
 target_include_directories(lv_micropython INTERFACE ${BINDINGS_DIR} ${LVMP_DIR})
 target_link_libraries(usermod INTERFACE lv_micropython)
 

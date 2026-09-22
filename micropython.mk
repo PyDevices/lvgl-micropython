@@ -70,6 +70,13 @@ $(if $(wildcard $(LVMP_C)),,$(error $(LVMP_C) not found. Sync an exact lvgl-bind
 CFLAGS_USERMOD += -I$(BINDINGS_DIR) -I$(LVMP_DIR) -Wno-unused-function
 SRC_USERMOD_LIB_C += $(SOURCES)
 SRC_USERMOD_C += $(LVMP_C)
+SRC_USERMOD_C += $(LVMP_DIR)/src/lvgl_micropython_build.c
+
+# --- which lvmp this firmware was built from ----------------------
+# Computed at build time from this repo's own git, never stored; "unknown" when
+# there is no git (a tarball). Read on a target as <module>.__revision__.
+LVMP_REVISION := $(shell git -C $(LVMP_DIR) describe --always --dirty --abbrev=7 2>/dev/null || echo unknown)
+CFLAGS_USERMOD += -DLVMP_REVISION='"$(LVMP_REVISION)"'
 
 # With LV_USE_FLOAT=1, upstream LVGL trips -Werror=double-promotion / float-conversion.
 # Port Makefiles (unix/webassembly) append -Wdouble-promotion after CFLAGS_USERMOD,

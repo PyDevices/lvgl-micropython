@@ -708,7 +708,7 @@ class event_loop:
         # Positive diff means _next_ok_ms is still in the future.
         return ticks_diff(self._next_ok_ms, ticks_ms()) <= 0
 
-    def _arm_gate(self):
+    def _arm_gate(self, work_ms=0):
         """Open the next slot one period after the last one, not after the work.
 
         Pacing from *completion* silently halved the tick rate: the next timer
@@ -717,10 +717,22 @@ class event_loop:
         second tick was rejected no matter how fast the work was (measured 50/s
         on a 10 ms timer, ESP32-P4).
 
-        Advancing from the previous slot keeps the cadence for fast frames. The
-        backlog protection the old comment was after is still there: if a slow
-        flush overran its slot, resynchronise to now instead of letting the
-        queued ticks fire back-to-back to catch up.
+        Advancing from the previous slot keeps the cadence for fast frames.
+
+        The overrun branch is what decides how much of the thread the
+        application gets, because on MicroPython the tick arrives through
+        ``micropython.schedule`` and so runs between the application's own
+        bytecodes. Resynchronising to *now* opened the gate at the instant the
+        slow pass ended, leaving only the one tick period before the next one
+        started: a 67.8 ms repaint against a 10 ms tick took ~87 % of the
+        thread indefinitely, and a 300-iteration Python loop took 20 340 ms
+        (lvgl-bindings#15). So after an overrun the gate stays shut for as
+        long as the pass itself took -- a slow frame halves the frame rate
+        instead of taking the thread. ``now + delay`` is not enough: the
+        timer's own cadence already delivers the next tick a period later,
+        which is exactly the sliver the application was already getting.
+
+        Fast frames never reach this branch, so their cadence is untouched.
         """
         if ticks_ms is None or ticks_add is None or ticks_diff is None:
             return
@@ -730,8 +742,18 @@ class event_loop:
             return
         nxt = ticks_add(self._next_ok_ms, self.delay)
         if ticks_diff(nxt, now) < 0:
-            nxt = now
+            nxt = ticks_add(now, self.delay if work_ms < self.delay else work_ms)
         self._next_ok_ms = nxt
+
+    def _run_and_arm(self, run):
+        """Run one pass and arm the gate with what that pass cost."""
+        if ticks_ms is None or ticks_diff is None:
+            run()
+            self._arm_gate()
+            return
+        start = ticks_ms()
+        run()
+        self._arm_gate(ticks_diff(ticks_ms(), start))
 
     def timer_cb(self, t):
         """Shared-timer callback: advance LVGL time and run/signal task handling.
@@ -761,8 +783,7 @@ class event_loop:
             self.refresh_event.set()
             self._arm_gate()
         else:
-            self.task_handler()
-            self._arm_gate()
+            self._run_and_arm(self.task_handler)
 
     async def async_refresh(self):
         """Asyncio task body: wait for refresh signals and run ``lv.task_handler``."""
@@ -770,6 +791,7 @@ class event_loop:
             await self.refresh_event.wait()
             if _LV_NESTING is None or _LV_NESTING.value == 0:
                 self.refresh_event.clear()
+                start = ticks_ms() if ticks_ms is not None else None
                 try:
                     lv.task_handler()
                 except Exception as e:
@@ -777,7 +799,10 @@ class event_loop:
                         self.exception_sink(e)
                 if self.refresh_cb:
                     self.refresh_cb()
-                self._arm_gate()
+                if start is None:
+                    self._arm_gate()
+                else:
+                    self._arm_gate(ticks_diff(ticks_ms(), start))
 
     def default_exception_sink(self, e):
         """Print ``e`` with traceback to stderr (default :attr:`exception_sink`)."""

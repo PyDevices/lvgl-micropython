@@ -8,3 +8,6 @@
 
 module("display_driver.py", base_path="./lib", opt=3)
 module("fs_driver.py", base_path="./lib", opt=3)
+
+# MicroPython 1.29: the manifest names its own C module (workspace retool, piece 1).
+c_module(".")  # this directory holds the micropython.cmake / micropython.mk for the C half

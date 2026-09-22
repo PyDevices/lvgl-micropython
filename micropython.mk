@@ -82,7 +82,11 @@ LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion
 # written for one names a target that does not exist on the other, the flags
 # never apply, and upstream LVGL then fails the port's -Werror=double-promotion
 # with no hint that a suppression was even attempted. Declare both spellings.
-LVMP_OBJ = $(BUILD)/$(patsubst $(USER_C_MODULES)/%,%,$(1)) $(BUILD)/$(1)
+# py.mk names a user-module object $(BUILD)/<module dir basename>/<path inside
+# the module>, whatever USER_C_MODULES was (a parent directory, or the module
+# directories themselves from c_module()); derive it from this module's own
+# directory rather than from USER_C_MODULES.
+LVMP_OBJ = $(BUILD)/$(patsubst $(LVMP_DIR)/%,$(notdir $(LVMP_DIR))/%,$(1)) $(BUILD)/$(1)
 $(foreach s,$(SOURCES),\
 	$(eval $(call LVMP_OBJ,$(s:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS)))
 $(eval $(call LVMP_OBJ,$(LVMP_C:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS))

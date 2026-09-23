@@ -94,19 +94,21 @@ at build time rather than finding out from a blank image. From the displayif
 side, `jpegio.register_lvgl_decoder()` and `jpegio.lvgl_decoders()` exist on
 every build and report what happened.
 
-## Build with the org's aggregator workspace (optional)
+## Build with other user C modules (optional)
 
-For building several user C modules together across many ports, the sibling [aggregator workspace](https://github.com/PyDevices/cmods) wraps the Make/CMake invocations above into one entry point — convenient, not required:
+To build several user C modules together across ports, name them in one
+manifest: this repository's `manifest.py` carries `c_module(".")`, and a
+manifest that `include()`s several such files builds them all. The
+[micropython-pydevices](https://github.com/PyDevices/micropython-pydevices)
+repository keeps ready-made presets (`manifests/lvgl.py` is this module with
+displayif) and out-of-tree variants and boards, so with the repositories as
+siblings of a MicroPython checkout it is upstream's own make and nothing else:
 
 ```bash
-cd ../cmods
-./build_mp.sh --port unix --variant standard
-./build_mp.sh --port windows --variant dev
-./build_mp.sh --port webassembly --variant pydevices
-./build_mp.sh --port esp32 --board ESP32_GENERIC_S3 --variant SPIRAM_OCT
+cd micropython/ports/unix
+make VARIANT_DIR=../../../micropython-pydevices/variants/unix/pydevices \
+     FROZEN_MANIFEST=../../../micropython-pydevices/manifests/lvgl.py
 ```
-
-Those commands cover Unix, Windows, WebAssembly, and MCU user-C-module builds without hand-assembling `USER_C_MODULES` lists yourself.
 
 ## App Usage & Timer Model
 

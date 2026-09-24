@@ -4,7 +4,7 @@
 # Point USER_C_MODULES at this repo (or this file) directly, e.g.:
 #     idf.py build -DUSER_C_MODULES=<path to lvgl-micropython>
 # usermod.cmake also accepts a semicolon-separated list of module paths if you
-# want this module plus others — no aggregator file required, e.g.:
+# want this module plus others, e.g.:
 #     -DUSER_C_MODULES="<path to lvgl-micropython>;<path to other_mod>"
 
 set(LVMP_DIR ${CMAKE_CURRENT_LIST_DIR})

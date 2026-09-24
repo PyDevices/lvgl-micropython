@@ -35,41 +35,54 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./regenerate_all.sh --target micropython
 ```
 
-## Direct Make builds
+## Build
 
-This repo builds standalone with plain `make` and `USER_C_MODULES` — no other workspace repo is required. `USER_C_MODULES` is the **workspace parent** (directory containing this repo and any other `*/micropython.mk` siblings):
+You need [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) beside
+this repository, checked out at the commit in
+[LVGL_BINDINGS_COMMIT](LVGL_BINDINGS_COMMIT) with its `lvgl` submodule. Its
+generated binding is committed, so there is nothing to generate:
 
 ```bash
-cd micropython/ports/unix
-# Optional: freeze this repo's Python helpers via manifest.py. Setting
-# FROZEN_MANIFEST replaces the port/variant's default manifest, so its upstream
-# frozen modules are omitted unless you wrap manifest.py in your own manifest.
-make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.py
+git clone https://github.com/PyDevices/lvgl-micropython
+git clone https://github.com/PyDevices/lvgl-bindings
+git -C lvgl-bindings checkout "$(cat lvgl-micropython/LVGL_BINDINGS_COMMIT)"
+git -C lvgl-bindings submodule update --init lvgl
 ```
 
-Override bindings location if needed:
+On MicroPython 1.29 or later, add one line to the manifest your build already
+uses:
 
-```bash
-make USER_C_MODULES=../../.. BINDINGS_DIR=/path/to/lvgl-bindings
+```python
+include("/path/to/lvgl-micropython/manifest.py")
 ```
 
-## Build (CMake ports)
+On unix that manifest is `ports/unix/variants/standard/manifest.py`; on esp32
+and rp2 it is usually `ports/<port>/boards/manifest.py`, unless your board
+brings its own. Then build as usual. The include brings in the `lvgl` C module
+and freezes two helpers, `display_driver` and `fs_driver`. If lvgl-bindings is
+not a sibling, pass `BINDINGS_DIR=/path/to/lvgl-bindings` to `make` on a Make
+port. The build stops if that checkout does not match the pin. Tested on the
+unix port against MicroPython v1.29.0, where `import lvgl` reports 9.5.
 
-`USER_C_MODULES` points at **this repo** (or `lvgl-micropython/micropython.cmake`). CMake does not scan the workspace for siblings:
+If you would rather not edit the MicroPython tree, write a manifest of your own
+and pass it as `FROZEN_MANIFEST=`. That replaces the port's default, so include
+the default too (`include("$(PORT_DIR)/variants/standard/manifest.py")` on
+unix, `include("$(PORT_DIR)/boards/manifest.py")` on esp32) or you lose
+`asyncio` and the port's other frozen modules.
+
+**Older than 1.29?** Manifests there have no `c_module()`, so this one will not
+load; use `USER_C_MODULES`, and freeze the two helpers from `lib/` yourself if
+you want them. On esp32 and rp2 point it at this repository:
 
 ```bash
-cd micropython/ports/esp32
-make BOARD=ESP32_GENERIC_S3 USER_C_MODULES=../../../lvgl-micropython
-
-cd micropython/ports/rp2
-make BOARD=RPI_PICO USER_C_MODULES=../../../lvgl-micropython
+make BOARD=ESP32_GENERIC_S3 USER_C_MODULES=/abs/path/to/lvgl-micropython
 ```
 
-To include this module **plus** other usermods, pass a semicolon-separated list (no aggregator file required):
+On Make ports such as unix point it at the directory that *contains* this
+repository, which builds every module in that directory:
 
 ```bash
-make BOARD=ESP32_GENERIC_S3 \
-  USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
+cd micropython/ports/unix && make USER_C_MODULES=../../..
 ```
 
 ## JPEG images need displayif
@@ -85,12 +98,14 @@ together. The point was one TJpgDec per firmware instead of two, without
 carrying a fork of LVGL — but it means a build of this module alone silently
 skips JPEGs at run time rather than failing at build time.
 
-So add displayif when you want JPEG:
+So add displayif when you want JPEG, with a second line in the same manifest:
 
-```bash
-make BOARD=ESP32_GENERIC_S3 \
-  USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"
+```python
+include("/path/to/lvgl-micropython/manifest.py")
+include("/path/to/displayif/manifest.py")
 ```
+
+(or, before 1.29, `USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"`).
 
 Both build files print a note when they cannot see displayif, so you are told
 at build time rather than finding out from a blank image. From the displayif
@@ -144,10 +159,10 @@ The smoke suite belongs to the exact pinned `lvgl-bindings` source; this repo do
 
 | Path | Role |
 |---|---|
-| `micropython.mk` | Make ports — `USER_C_MODULES` = workspace parent |
-| `micropython.cmake` | CMake ports — `USER_C_MODULES` = this repo (see above) |
+| `micropython.mk` | Make ports (pre-1.29: `USER_C_MODULES` = parent directory) |
+| `micropython.cmake` | CMake ports (pre-1.29: `USER_C_MODULES` = this repo) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
-| `manifest.py` | Freezes `lib/display_driver.py` (sync from lvgl-bindings) |
+| `manifest.py` | Names the C module and freezes `lib/display_driver.py`, `lib/fs_driver.py` (synced from lvgl-bindings) |
 | `lib/display_driver.py` | Vendored PyDevices LVGL glue (`import display_driver`) |
 | `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source consumed by builds |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh helpers and record an exact commit/tag |

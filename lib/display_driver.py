@@ -563,6 +563,9 @@ class event_loop:
 
     _current_instance = None
 
+    # The most the gate holds LVGL back after a slow pass (see _arm_gate).
+    max_yield_ms = 100
+
     def __init__(
         self,
         freq=None,
@@ -571,6 +574,7 @@ class event_loop:
         asynchronous=False,
         exception_sink=None,
         period_ms=None,
+        max_yield_ms=None,
     ):
         """Create and register the LVGL event loop.
 
@@ -583,6 +587,9 @@ class event_loop:
             exception_sink: Callable receiving exceptions from task handling;
                 defaults to :meth:`default_exception_sink`.
             period_ms: Explicit tick period in milliseconds (overrides ``freq``).
+            max_yield_ms: Most the gate stays shut after a slow pass, leaving
+                the thread to the application (default 100; see
+                :meth:`_arm_gate`).
 
         Raises:
             RuntimeError: Another loop is already running or async mode is
@@ -602,6 +609,8 @@ class event_loop:
             self.delay = max(1, 1000 // int(freq))
         else:
             self.delay = LVGL_PERIOD_MS
+        if max_yield_ms is not None:
+            self.max_yield_ms = int(max_yield_ms)
 
         self.refresh_cb = refresh_cb
         self.exception_sink = exception_sink if exception_sink else self.default_exception_sink
@@ -733,6 +742,15 @@ class event_loop:
         which is exactly the sliver the application was already getting.
 
         Fast frames never reach this branch, so their cadence is untouched.
+
+        The hold is capped at ``max_yield_ms``. A pass much longer than a
+        repaint is almost always the application's own work, run from LVGL
+        timers (list rows built, results drained), and there is no other
+        application code waiting for the thread: an uncapped hold only left
+        it idle for as long again, doubling every UI stall. On an
+        ESP32-S3-Touch-LCD-7 a 440 ms pass was followed by ~400 ms of idle,
+        on every screen change. The capped hold still covers the ~60 ms
+        repaints lvgl-bindings#15 was about.
         """
         if ticks_ms is None or ticks_add is None or ticks_diff is None:
             return
@@ -742,7 +760,8 @@ class event_loop:
             return
         nxt = ticks_add(self._next_ok_ms, self.delay)
         if ticks_diff(nxt, now) < 0:
-            nxt = ticks_add(now, self.delay if work_ms < self.delay else work_ms)
+            hold = min(work_ms, self.max_yield_ms)
+            nxt = ticks_add(now, self.delay if hold < self.delay else hold)
         self._next_ok_ms = nxt
 
     def _run_and_arm(self, run):

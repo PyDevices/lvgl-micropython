@@ -16,26 +16,25 @@ Consumers sync an exact bindings commit or immutable release tag.
 Importing this module uses the active :class:`appdev.App` when the application
 has already constructed one explicitly. For compatibility, it falls back to
 creating an app from ``board_config`` when no active app exists. The selected
-coordinator starts ``event_loop`` and registers display flush and input devices.
+coordinator registers display flush and input devices; the LVGL loop is a
+``multimer`` timer.
 
 ``event_loop`` was adapted from upstream lv_utils (Amir Gonnen). Integration
 changes:
 
-* Periodic tick driven by ``appdev.App.every``.
-* ``asyncio`` from ``multimer``.
-* Sync path runs ``lv.task_handler()`` from the tick callback (re-entrancy
-  guarded); the app timer delivers on the main thread.
-* Async mode arms the refresh task via ``appdev.App.on_start``, so module-top
-  ``import display_driver`` is safe before any event loop exists.
-* Application lifecycle owned by ``appdev.App``: it keeps itself alive past the
-  end of the script body, so a trailing ``app.run()`` is optional.
-
-Interactive desktop (librt + REPL): ``task_handler`` / indev reads are paced at
-``LVGL_PERIOD_MS`` (10 ms) with a wall-clock gate. Display refresh stays at
-LVGL's ``LV_DEF_REFR_PERIOD`` (~33 ms). PARTIAL ``show()`` is gated to that
-refresh cadence so presents do not track the faster task loop. The App
-timer stays at 10 ms; a host-pump subscription drains SDL/keys every tick so
-the window cannot stall while LVGL is paused or slow.
+* One ``multimer`` ONE_SHOT timer runs ``lv.timer_handler()`` and re-arms
+  itself to what LVGL returns (the ms until LVGL's next timer is due), so an
+  idle screen wakes when LVGL wants it, not on a 10 ms poll. After a pass
+  longer than its slot the loop yields ``min(pass, max_yield_ms)`` before the
+  next one (lvgl-bindings#15 and #19).
+* ``lv.tick_inc`` is fed from ``multimer.ticks_ms`` before each pass.
+* PARTIAL panels present from the display's own frame clock
+  (``display.frame_clock``), and only when a flush happened since the last
+  present; DIRECT / shared-framebuffer panels present from ``flush_is_last``.
+* Application lifecycle is ``appdev.App`` on ``multimer``: the app keeps
+  itself alive past the end of the script body, so a trailing ``app.run()``
+  is optional, and callbacks run on the main thread at safe points on every
+  host, so there is no separate async mode.
 """
 
 import gc
@@ -45,7 +44,7 @@ import lvgl as lv
 
 # The binding-internal callback re-entrancy counter. MicroPython and
 # CircuitPython export it (an audited exception to the canonical model) and
-# the sync task-handler gates on it. CPython deliberately does not export it
+# the task-handler gates on it. CPython deliberately does not export it
 # - re-entrancy is guarded in C with a ContextVar-scoped counter - so there
 # the Python-side gate simply stands down.
 _LV_NESTING = getattr(lv, "_nesting", None)
@@ -53,6 +52,8 @@ _LV_NESTING = getattr(lv, "_nesting", None)
 import appdev
 import events
 import keys
+import multimer
+from multimer import ticks_diff, ticks_ms
 
 app = appdev.App.current()
 if app is None:
@@ -64,23 +65,20 @@ display_drv = app.primary
 if display_drv is None:
     raise RuntimeError("display_driver requires an appdev.App with a display")
 
-try:
-    from multimer import asyncio, ticks_add, ticks_diff, ticks_ms
-except ImportError:
-    asyncio = None
-    ticks_add = None
-    ticks_diff = None
-    ticks_ms = None
-
-asyncio_available = asyncio is not None
-
+# The most the loop waits before asking LVGL again, whatever it returned: a
+# bound on idle wake-ups, and the input read cadence LVGL is set to.
 LVGL_PERIOD_MS = 10
-# Match LV_DEF_REFR_PERIOD in lv_conf.h — PARTIAL present cadence / display refresh.
+# Fallback present cadence when a display has no frame period of its own.
 LVGL_REFR_PERIOD_MS = 33
 _driver_ref = None  # primary DisplayDriver (compat)
 _drivers = []  # all DisplayDriver instances
-_host_pump_sub = None
-_present_next_ok_ms = None
+_host_pump_timer = None
+# LVGL owns presentation and input while it runs: the App's own refresh timer
+# and service tick stand down (app.pause_refresh, app.pause_polling), so a
+# PARTIAL panel is presented once per frame from the display's frame clock,
+# and the host events reach LVGL's indevs instead of being consumed first.
+_refresh_claim = None
+_polling_claim = None
 
 HOST = appdev.HOST
 POINTER = appdev.POINTER
@@ -552,18 +550,18 @@ class VirtualDevices:
                 self._app.request_quit()
 
 
-class event_loop:
-    """LVGL task loop driven by ``App.every``.
 
-    One instance may be active at a time. Sync mode runs ``lv.task_handler``
-    from the shared timer; async mode signals an asyncio refresh task.
-    Prefer ``import display_driver`` (module ``main()``) over constructing this
-    by hand unless you need custom ``freq`` / ``asynchronous`` settings.
+class event_loop:
+    """The LVGL loop: one ``multimer`` timer that runs ``lv.timer_handler``.
+
+    One instance may be active at a time. Prefer ``import display_driver``
+    (module ``main()``) over constructing this by hand unless you need custom
+    ``period_ms`` / ``max_yield_ms`` settings.
     """
 
     _current_instance = None
 
-    # The most the gate holds LVGL back after a slow pass (see _arm_gate).
+    # The most the loop holds LVGL back after a slow pass (see _next_delay).
     max_yield_ms = 100
 
     def __init__(
@@ -576,24 +574,24 @@ class event_loop:
         period_ms=None,
         max_yield_ms=None,
     ):
-        """Create and register the LVGL event loop.
+        """Create and register the LVGL loop.
 
         Args:
             freq: Desired Hz when ``period_ms`` is omitted (period = ``1000 // freq``).
             max_scheduled: Kept for lv_utils API parity (unused).
-            refresh_cb: Optional zero-arg callable after each successful
-                ``lv.task_handler()``.
-            asynchronous: When True, drive LVGL via an asyncio refresh task.
+            refresh_cb: Optional zero-arg callable after each ``lv.timer_handler()``.
+            asynchronous: Kept for API parity and ignored: ``multimer``
+                delivers on the host's own loop where the host owns one.
             exception_sink: Callable receiving exceptions from task handling;
                 defaults to :meth:`default_exception_sink`.
-            period_ms: Explicit tick period in milliseconds (overrides ``freq``).
-            max_yield_ms: Most the gate stays shut after a slow pass, leaving
-                the thread to the application (default 100; see
-                :meth:`_arm_gate`).
+            period_ms: The most the loop waits between passes, in ms
+                (default ``LVGL_PERIOD_MS``). LVGL asks for less when a timer
+                is due sooner.
+            max_yield_ms: Most the loop stays off after a slow pass, leaving
+                the thread to the application (default 100; see :meth:`_next_delay`).
 
         Raises:
-            RuntimeError: Another loop is already running or async mode is
-                requested without asyncio.
+            RuntimeError: Another loop is already running.
         """
         if self.is_running():
             raise RuntimeError("Event loop is already running!")
@@ -604,7 +602,7 @@ class event_loop:
         event_loop._current_instance = self
 
         if period_ms is not None:
-            self.delay = int(period_ms)
+            self.delay = max(1, int(period_ms))
         elif freq is not None:
             self.delay = max(1, 1000 // int(freq))
         else:
@@ -614,72 +612,43 @@ class event_loop:
 
         self.refresh_cb = refresh_cb
         self.exception_sink = exception_sink if exception_sink else self.default_exception_sink
-        # Start paused and do not arm machine.Timer until ``enable()``. On
-        # ESP32-P4, even a no-op timer callback interrupting SPIRAM
-        # ``draw_buf_create`` corrupts LVGL handlers (Illegal instruction,
-        # MTVAL often an ASCII fragment like ``star``).
+        # Start paused; ``enable()`` arms the timer. Nothing may run LVGL
+        # before the draw buffers exist (on an ESP32-P4 even a no-op callback
+        # interrupting SPIRAM ``draw_buf_create`` corrupts LVGL handlers).
         self._pause = 1
         self._in_task = False
-        self._next_ok_ms = None
         self._last_tick_ms = None
+        self._timer = multimer.Timer(-1)
+        self._timer.name = "lvgl"
+        self.passes = 0
+        self.slow_passes = 0
+        self.last_pass_ms = 0
 
-        self.asynchronous = asynchronous
-        self.refresh_task = None
-        self._timer_sub = None
-        self._async_armed = False
+    @property
+    def timer(self):
+        """The ``multimer.Timer`` driving LVGL (for ``multimer.report()``)."""
+        return self._timer
 
-        if self.asynchronous:
-            if not asyncio_available:
-                raise RuntimeError("Cannot run asynchronous event loop. asyncio is not available!")
-            self.refresh_event = asyncio.Event()
-            # ``App`` owns the "the loop is running now" moment; ask to be
-            # armed then. Runs immediately if a loop is already running.
-            app.on_start(self.arm)
-        # Sync: defer ``every`` until first ``enable()`` (see ``_arm_sync_timer``).
-
-    def _arm_sync_timer(self):
-        """Subscribe the sync tick once; safe to call repeatedly."""
-        if self.asynchronous:
+    def _arm(self):
+        if self._timer.running:
             return
-        if self._timer_sub is not None:
-            if app._timer is not None:
-                return
-            self._timer_sub = None
-        self._timer_sub = app.every(self.delay, self.timer_cb)
-
-    def arm(self):
-        """Create the async refresh task + shared timer once a loop is running.
-
-        No-op in sync mode or when already armed. Safe to call repeatedly.
-        """
-        if not self.asynchronous or self._async_armed:
-            return
-        self._async_armed = True
-        self.refresh_task = asyncio.create_task(self.async_refresh())
-        self._timer_sub = app.every(self.delay, self.timer_cb)
+        self._timer.init(mode=multimer.Timer.ONE_SHOT, period=self.delay, callback=self._on_timer)
 
     def deinit(self):
-        """Stop the tick subscription / async task and clear the singleton."""
-        if getattr(self, "_timer_sub", None) is not None:
-            self._timer_sub.cancel()
-            self._timer_sub = None
-        if self.asynchronous and self.refresh_task is not None:
-            self.refresh_task.cancel()
-            self.refresh_task = None
-        self._async_armed = False
+        """Stop the timer and clear the singleton."""
+        self._timer.deinit()
         event_loop._current_instance = None
 
     def disable(self):
         """Pause LVGL task handling (re-entrant; pair with :meth:`enable`)."""
-        # Pause LVGL task handling (e.g. while building the UI). Re-entrant.
         self._pause += 1
 
     def enable(self):
-        """Resume LVGL task handling after :meth:`disable`; arms the sync timer."""
+        """Resume LVGL task handling after :meth:`disable`; arms the timer."""
         if self._pause > 0:
             self._pause -= 1
         if self._pause == 0:
-            self._arm_sync_timer()
+            self._arm()
 
     @staticmethod
     def is_running():
@@ -692,136 +661,77 @@ class event_loop:
         return event_loop._current_instance
 
     def task_handler(self, _=None):
-        """Run ``lv.task_handler()`` once when not paused and not nested."""
+        """Run ``lv.timer_handler()`` once when not paused and not nested.
+
+        Returns the ms until LVGL's next timer is due, or None when the pass
+        did not run.
+        """
         if self._in_task or self._pause > 0:
-            return
+            return None
         self._in_task = True
         try:
             if _LV_NESTING is None or _LV_NESTING.value == 0:
-                lv.task_handler()
+                nxt = lv.timer_handler()
                 if self.refresh_cb:
                     self.refresh_cb()
+                return nxt
         except Exception as e:
             if self.exception_sink:
                 self.exception_sink(e)
         finally:
             self._in_task = False
+        return None
 
     def tick(self):
-        """Manually invoke the timer callback once (same path as the shared timer)."""
-        self.timer_cb(None)
+        """Run one pass by hand (same path as the timer)."""
+        self._on_timer(self._timer)
 
-    def _gate_allows(self):
-        if ticks_ms is None or self._next_ok_ms is None:
-            return True
-        # Positive diff means _next_ok_ms is still in the future.
-        return ticks_diff(self._next_ok_ms, ticks_ms()) <= 0
-
-    def _arm_gate(self, work_ms=0):
-        """Open the next slot one period after the last one, not after the work.
-
-        Pacing from *completion* silently halved the tick rate: the next timer
-        tick arrives ``delay - work`` ms after the callback returns, always
-        inside a gate that only opened at ``completion + delay``, so every
-        second tick was rejected no matter how fast the work was (measured 50/s
-        on a 10 ms timer, ESP32-P4).
-
-        Advancing from the previous slot keeps the cadence for fast frames.
-
-        The overrun branch is what decides how much of the thread the
-        application gets, because on MicroPython the tick arrives through
-        ``micropython.schedule`` and so runs between the application's own
-        bytecodes. Resynchronising to *now* opened the gate at the instant the
-        slow pass ended, leaving only the one tick period before the next one
-        started: a 67.8 ms repaint against a 10 ms tick took ~87 % of the
-        thread indefinitely, and a 300-iteration Python loop took 20 340 ms
-        (lvgl-bindings#15). So after an overrun the gate stays shut for as
-        long as the pass itself took -- a slow frame halves the frame rate
-        instead of taking the thread. ``now + delay`` is not enough: the
-        timer's own cadence already delivers the next tick a period later,
-        which is exactly the sliver the application was already getting.
-
-        Fast frames never reach this branch, so their cadence is untouched.
-
-        The hold is capped at ``max_yield_ms``. A pass much longer than a
-        repaint is almost always the application's own work, run from LVGL
-        timers (list rows built, results drained), and there is no other
-        application code waiting for the thread: an uncapped hold only left
-        it idle for as long again, doubling every UI stall. On an
-        ESP32-S3-Touch-LCD-7 a 440 ms pass was followed by ~400 ms of idle,
-        on every screen change. The capped hold still covers the ~60 ms
-        repaints lvgl-bindings#15 was about.
-        """
-        if ticks_ms is None or ticks_add is None or ticks_diff is None:
-            return
+    def _advance_lvgl_clock(self):
         now = ticks_ms()
-        if self._next_ok_ms is None:
-            self._next_ok_ms = ticks_add(now, self.delay)
-            return
-        nxt = ticks_add(self._next_ok_ms, self.delay)
-        if ticks_diff(nxt, now) < 0:
-            hold = min(work_ms, self.max_yield_ms)
-            nxt = ticks_add(now, self.delay if hold < self.delay else hold)
-        self._next_ok_ms = nxt
+        if self._last_tick_ms is None:
+            self._last_tick_ms = now
+        elapsed = ticks_diff(now, self._last_tick_ms)
+        if elapsed > 0:
+            lv.tick_inc(elapsed)
+            self._last_tick_ms = now
+        return now
 
-    def _run_and_arm(self, run):
-        """Run one pass and arm the gate with what that pass cost."""
-        if ticks_ms is None or ticks_diff is None:
-            run()
-            self._arm_gate()
-            return
-        start = ticks_ms()
-        run()
-        self._arm_gate(ticks_diff(ticks_ms(), start))
+    def _next_delay(self, wanted, work_ms):
+        """When to run again: what LVGL asked for, bounded, and the yield rule.
 
-    def timer_cb(self, t):
-        """Shared-timer callback: advance LVGL time and run/signal task handling.
-
-        Args:
-            t: Timer instance (ignored; may be ``None`` from :meth:`tick`).
+        ``wanted`` is what ``lv.timer_handler`` returned (ms until its next
+        timer), capped at ``self.delay`` so input is read at least that
+        often. A pass that took longer than that -- LVGL asking to run
+        "again now" after any real work counts -- is followed by at least a
+        period off, and by ``min(work, max_yield_ms)`` when the pass was
+        longer than a period: on MicroPython the pass runs between the
+        application's own bytecodes, and resuming the instant it ended took
+        ~87 % of the thread on an ESP32-P4 (lvgl-bindings#15); an uncapped
+        hold doubled every UI stall on an ESP32-S3 (lvgl-bindings#19).
         """
-        # Called from the app's shared timer (on the main thread). Arming is
-        # handled by ``app.on_start`` in __init__, not opportunistically here.
-        # Advance LVGL time by real elapsed ms. The present-frame gate may
-        # skip task_handler when show()/flush is slow (mipidsi ~30ms); if we
-        # also skipped tick_inc there, timers ran at ~half wall-clock speed.
-        if ticks_ms is not None:
-            now = ticks_ms()
-            if self._last_tick_ms is None:
-                self._last_tick_ms = now
-            elapsed = ticks_diff(now, self._last_tick_ms)
-            if elapsed > 0:
-                lv.tick_inc(elapsed)
-                self._last_tick_ms = now
-        if not self._gate_allows():
-            return
-        if self._pause > 0:
-            self._arm_gate()
-            return
-        if self.asynchronous:
-            self.refresh_event.set()
-            self._arm_gate()
-        else:
-            self._run_and_arm(self.task_handler)
+        if wanted is None or wanted < 0:
+            wanted = self.delay
+        delay = min(int(wanted), self.delay)
+        if work_ms > delay:
+            # The pass outran what LVGL asked for (including "again now"):
+            # at least a period off, longer for a slow pass, capped.
+            self.slow_passes += 1
+            delay = max(self.delay, min(work_ms, self.max_yield_ms))
+        return max(1, delay)
 
-    async def async_refresh(self):
-        """Asyncio task body: wait for refresh signals and run ``lv.task_handler``."""
-        while True:
-            await self.refresh_event.wait()
-            if _LV_NESTING is None or _LV_NESTING.value == 0:
-                self.refresh_event.clear()
-                start = ticks_ms() if ticks_ms is not None else None
-                try:
-                    lv.task_handler()
-                except Exception as e:
-                    if self.exception_sink:
-                        self.exception_sink(e)
-                if self.refresh_cb:
-                    self.refresh_cb()
-                if start is None:
-                    self._arm_gate()
-                else:
-                    self._arm_gate(ticks_diff(ticks_ms(), start))
+    def _on_timer(self, timer):
+        start = self._advance_lvgl_clock()
+        if self._pause > 0:
+            timer.reschedule(self.delay)
+            return
+        wanted = self.task_handler()
+        end = ticks_ms()
+        work = ticks_diff(end, start)
+        self.passes += 1
+        self.last_pass_ms = work
+        if not timer.running:
+            return  # deinit() during the pass
+        timer.reschedule(self._next_delay(wanted, work))
 
     def default_exception_sink(self, e):
         """Print ``e`` with traceback to stderr (default :attr:`exception_sink`)."""
@@ -839,38 +749,29 @@ def main():
     Called automatically on ``import display_driver`` using the active
     :class:`appdev.App`, or the legacy ``board_config`` fallback.
     """
-    global _driver_ref, _drivers, _host_pump_sub
+    global _driver_ref, _drivers, _refresh_claim, _polling_claim
     gc.collect()
     if not lv.is_initialized():
         lv.init()
-    # Never arm a timer before SPIRAM draw buffers exist. A soft-timer callback
-    # during draw_buf_create can corrupt LVGL handlers on ESP32-P4.
-    app.stop_timer()
+    if _refresh_claim is None and getattr(app, "_refresh_claim", None) is None:
+        _refresh_claim = app.pause_refresh()
+    if _polling_claim is None and getattr(app, "_polling_claim", None) is None:
+        _polling_claim = app.pause_polling()
     loop_inst = event_loop.current_instance()
     if loop_inst is not None:
         # Already-running loop: pause around driver (re)construction.
         loop_inst.disable()
     try:
-        if lv.group_get_default() is None:
-            lv.group_create().set_default()
-
-        devs = app.devices
-        _driver_ref = DisplayDriver(
-            display_drv,
-            devs,
-        )
-        _drivers = [_driver_ref]
-        # Start event_loop only after draw buffers exist (sync path defers
-        # every() until enable(); still construct after DisplayDriver so
-        # host_pump / service cannot arm the shared timer early).
+        # No timer callback of any kind runs while the draw buffers are
+        # created (a soft-timer callback during draw_buf_create corrupts LVGL
+        # handlers on an ESP32-P4); the hold releases what came due after.
+        with multimer.hold():
+            if lv.group_get_default() is None:
+                lv.group_create().set_default()
+            _driver_ref = DisplayDriver(display_drv, app.devices)
+            _drivers = [_driver_ref]
         if loop_inst is None:
-            # PARTIAL: present after every task_handler (blit already wrote the
-            # panel FB). Shared DIRECT: present only from flush_is_last.
-            loop_inst = event_loop(
-                period_ms=LVGL_PERIOD_MS,
-                asynchronous=app.timer_async,
-                refresh_cb=_present_lvgl_displays,
-            )
+            loop_inst = event_loop(period_ms=LVGL_PERIOD_MS)
         _ensure_host_pump()
     finally:
         if loop_inst is not None:
@@ -879,13 +780,27 @@ def main():
     def _lvgl_shutdown_before_quit():
         # Stop the bridge before releasing the display so no callback can touch
         # LVGL state during interpreter finalization.
-        global _host_pump_sub
-        if _host_pump_sub is not None:
+        global _host_pump_timer, _refresh_claim, _polling_claim
+        if _host_pump_timer is not None:
             try:
-                _host_pump_sub.cancel()
+                _host_pump_timer.deinit()
             except Exception:
                 pass
-            _host_pump_sub = None
+            _host_pump_timer = None
+        for drv in _drivers:
+            drv.release_frame_clock()
+        if _refresh_claim is not None:
+            try:
+                _refresh_claim.release()
+            except Exception:
+                pass
+            _refresh_claim = None
+        if _polling_claim is not None:
+            try:
+                _polling_claim.release()
+            except Exception:
+                pass
+            _polling_claim = None
         inst = event_loop.current_instance()
         if inst is not None:
             inst.deinit()
@@ -899,47 +814,26 @@ def main():
 
 
 def _ensure_host_pump():
-    """Keep HOST/SDL draining on the 10 ms App tick for all drivers."""
-    global _host_pump_sub
-    if _host_pump_sub is not None and app._timer is not None:
+    """Keep HOST/SDL draining on a 10 ms timer for all drivers.
+
+    LVGL reads its indevs from its own timers, and they stop while the loop
+    is paused; the window must still answer the OS, so the host queue is
+    drained here regardless.
+    """
+    global _host_pump_timer
+    if _host_pump_timer is not None and _host_pump_timer.running:
         return
-    if _host_pump_sub is not None:
-        try:
-            _host_pump_sub.cancel()
-        except Exception:
-            pass
-        _host_pump_sub = None
+    if not any(getattr(drv, "virtual_devices", ()) for drv in _drivers):
+        # A board with no host window has nothing to drain: no timer, so a
+        # panel is not woken 100 times a second for an empty loop.
+        return
 
     def _host_pump(_t):
         for drv in _drivers:
             for vd in getattr(drv, "virtual_devices", ()):
                 vd.poll_host_device()
 
-    _host_pump_sub = app.every(10, _host_pump)
-
-
-def _present_lvgl_displays():
-    """Present PARTIAL panels after ``lv.task_handler`` (DIRECT shows in flush).
-
-    Gated to :data:`LVGL_REFR_PERIOD_MS` so a faster ``task_handler`` loop does
-    not present every tick. DIRECT / shared-FB paths present from flush instead.
-    """
-    global _present_next_ok_ms
-    if ticks_ms is not None and ticks_diff is not None and ticks_add is not None:
-        now = ticks_ms()
-        if _present_next_ok_ms is not None and ticks_diff(_present_next_ok_ms, now) > 0:
-            return
-        _present_next_ok_ms = ticks_add(now, LVGL_REFR_PERIOD_MS)
-    for drv in _drivers:
-        if getattr(drv, "_share_fb", False):
-            continue
-        panel = getattr(drv, "display_drv", None)
-        if panel is None or not callable(getattr(panel, "show", None)):
-            continue
-        try:
-            panel.show()
-        except Exception:
-            pass
+    _host_pump_timer = multimer.every(LVGL_PERIOD_MS, _host_pump, name="lvgl.host_pump")
 
 
 def attach(display, devices=None, *, color_format=None, blocking=True):
@@ -972,11 +866,9 @@ def attach(display, devices=None, *, color_format=None, blocking=True):
     kwargs = {"devs": devices, "blocking": blocking}
     if color_format is not None:
         kwargs["color_format"] = color_format
-    drv = DisplayDriver(display, **kwargs)
+    with multimer.hold():
+        drv = DisplayDriver(display, **kwargs)
     _drivers.append(drv)
-    loop_inst = event_loop.current_instance()
-    if loop_inst is not None:
-        loop_inst.refresh_cb = _present_lvgl_displays
     _ensure_host_pump()
     if prev_default is not None and hasattr(prev_default, "set_default"):
         prev_default.set_default()
@@ -1591,12 +1483,16 @@ def create_devices(devs, lv_display, virtual_devices=None, window_id=None):
     return virtual_devices
 
 
+
 class DisplayDriver:
     """Bridge a displaydev driver to an LVGL display + input devices.
 
     Creates the LVGL display, chooses DIRECT (shared framebuffer) or PARTIAL
     render mode, installs flush callbacks, and wires LVGL input devices via
-    :func:`create_devices`.
+    :func:`create_devices`. A PARTIAL panel is presented from the display's
+    own frame clock, only after a flush; a DIRECT panel presents from
+    ``flush_is_last``. LVGL's refresh timer is set to the display's frame
+    period, so rendering and presenting share one cadence.
     """
 
     def __init__(
@@ -1629,6 +1525,9 @@ class DisplayDriver:
         self._draw_buf2 = None
         # Keep Python refs alive for set_buffers panel views (GC must not free).
         self._fb_share = None
+        self._dirty = False
+        self._frame_clock = None
+        self.presents = 0
 
         self.lv_display = lv.display_create(display_drv.width, display_drv.height)
         self.lv_display.set_color_format(color_format)
@@ -1671,11 +1570,71 @@ class DisplayDriver:
             self.lv_display.set_draw_buffers(self._draw_buf1, self._draw_buf2)
             self.lv_display.set_render_mode(lv.DISPLAY_RENDER_MODE.PARTIAL)
 
+        self._match_refresh_period()
+        if not self._share_fb and callable(getattr(display_drv, "show", None)):
+            self._subscribe_frame_clock()
+
         self.virtual_devices = create_devices(
             devs,
             self.lv_display,
             window_id=getattr(display_drv, "_window_id", None),
         )
+
+    # -- frame pacing ------------------------------------------------------
+
+    @property
+    def frame_period_ms(self):
+        """The display's frame period, from its frame clock or the fallback."""
+        period = getattr(self.display_drv, "refresh_period_ms", None)
+        try:
+            period = int(period)
+        except (TypeError, ValueError):
+            period = 0
+        return period if period > 0 else LVGL_REFR_PERIOD_MS
+
+    def _match_refresh_period(self):
+        """Set LVGL's refresh timer to the display's frame period."""
+        try:
+            timer = self.lv_display.get_refr_timer()
+        except Exception:
+            return
+        if timer is not None:
+            try:
+                timer.set_period(self.frame_period_ms)
+            except Exception:
+                pass
+
+    def _subscribe_frame_clock(self):
+        fc = getattr(self.display_drv, "frame_clock", None)
+        if fc is None:
+            return
+        self._frame_clock = fc
+        fc.subscribe(self._present)
+
+    def release_frame_clock(self):
+        fc = self._frame_clock
+        self._frame_clock = None
+        if fc is not None:
+            try:
+                fc.unsubscribe(self._present)
+            except Exception:
+                pass
+
+    def _present(self):
+        """Frame-clock callback: present a PARTIAL panel that was flushed to."""
+        if not self._dirty:
+            return
+        self._dirty = False
+        panel = self.display_drv
+        if hasattr(panel, "_sdl_active") and not panel._sdl_active():
+            return
+        try:
+            panel.show()
+            self.presents += 1
+        except Exception:
+            pass
+
+    # -- flush -------------------------------------------------------------
 
     def _flush_cb_direct(self, disp_drv, area, color_p):
         """DIRECT: LVGL already painted the panel FB; present on last area."""
@@ -1704,6 +1663,7 @@ class DisplayDriver:
         if last and not synced:
             try:
                 panel.show()
+                self.presents += 1
             except Exception:
                 pass
         if self._blocking:
@@ -1722,11 +1682,10 @@ class DisplayDriver:
 
         data = color_p.__dereference__(width * height * self._color_size)
         panel.blit_rect(data, area.x1, area.y1, width, height)
+        self._dirty = True
         if self._blocking:
             self.lv_display.flush_ready()
 
 
 # Import-time bootstrap (same as before the probe split).
 main()
-
-# org-secret smoke check 2026-08-02T11:08Z

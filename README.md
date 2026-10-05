@@ -116,17 +116,17 @@ every build and report what happened.
 
 To build several user C modules together across ports, name them in one
 manifest: this repository's `manifest.py` carries `c_module(".")`, and a
-manifest that `include()`s several such files builds them all. The
-[micropython-pydevices](https://github.com/PyDevices/micropython-pydevices)
-repository keeps ready-made presets (`manifests/lvgl.py` is this module with
-displayif) and out-of-tree variants and boards, so with the repositories as
-siblings of a MicroPython checkout it is upstream's own make and nothing else:
+manifest that `include()`s several such files builds them all.
+[micropython-pydevices](https://github.com/PyDevices/micropython-pydevices)'
+`build_mp.py` does that for you: name the modules and it builds them on any
+port, with upstream's own boards:
 
 ```bash
-cd micropython/ports/unix
-make VARIANT_DIR=../../../micropython-pydevices/variants/unix/pydevices \
-     FROZEN_MANIFEST=../../../micropython-pydevices/manifests/lvgl.py
+micropython-pydevices/build_mp.py --port unix --variant pydevices --modules displayif,lvgl-micropython
 ```
+
+displayif comes along for JPEG: it owns the TJpgDec decoder LVGL draws JPEGs
+through.
 
 ## App Usage & Timer Model
 

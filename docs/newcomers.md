@@ -74,12 +74,13 @@ repository or its `micropython.cmake`. The root README contains supported
 commands for both shapes and shows how to combine modules.
 
 JPEG is the important optional boundary: LVGL can always display PNG and its BIN
-format, but JPEG needs [displayif](https://github.com/PyDevices/displayif) in
-the same firmware. displayif's `jpegio` registers the decoder when it sees this
-user module; a build without it can otherwise skip JPEGs at runtime.
+format, but JPEG needs the [jpegio](https://github.com/PyDevices/micropython-pydevices/tree/main/modules/jpegio) module (micropython-pydevices'
+`modules/jpegio`, displayif's until 2026-10-06) in the same firmware. jpegio
+registers the decoder when it sees this user module; a build without it can
+otherwise skip JPEGs at runtime.
 
-The `micropython-pydevices` `lvgl.py` manifest is the maintained
-multi-repository preset for LVGL plus displayif.
+With micropython-pydevices, name both: `build_mp.py --modules
+jpegio,lvgl-micropython`.
 
 ## Contributor boundary
 

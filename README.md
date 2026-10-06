@@ -85,32 +85,31 @@ repository, which builds every module in that directory:
 cd micropython/ports/unix && make USER_C_MODULES=../../..
 ```
 
-## JPEG images need displayif
+## JPEG images need jpegio
 
 `lv.image` draws PNG and LVGL's own BIN format on any build of this module. It
-draws **nothing at all** for a JPEG unless
-[displayif](https://github.com/PyDevices/displayif) is in the same firmware.
+draws **nothing at all** for a JPEG unless the [jpegio](https://github.com/PyDevices/micropython-pydevices/tree/main/modules/jpegio) module is in the
+same firmware.
 
 The decoder moved. `LV_USE_TJPGD` is 0 in the bindings, so LVGL's built-in
-JPEG decoder is not compiled in; displayif's `jpegio` registers its own TJpgDec
-with LVGL through `lv_image_decoder_create` when the two usermods are built
-together. The point was one TJpgDec per firmware instead of two, without
-carrying a fork of LVGL — but it means a build of this module alone silently
-skips JPEGs at run time rather than failing at build time.
+JPEG decoder is not compiled in; jpegio registers its own TJpgDec with LVGL
+through `lv_image_decoder_create` when the two are built together. The point
+was one TJpgDec per firmware instead of two, without carrying a fork of LVGL,
+but it means a build of this module alone silently skips JPEGs at run time
+rather than failing at build time.
 
-So add displayif when you want JPEG, with a second line in the same manifest:
+So name jpegio when you want JPEG:
 
-```python
-include("/path/to/lvgl-micropython/manifest.py")
-include("/path/to/displayif/manifest.py")
+```bash
+micropython-pydevices/build_mp.py --port unix --variant pydevices --modules jpegio,lvgl-micropython
 ```
 
-(or, before 1.29, `USER_C_MODULES="/abs/path/to/lvgl-micropython;/abs/path/to/displayif"`).
-
-Both build files print a note when they cannot see displayif, so you are told
-at build time rather than finding out from a blank image. From the displayif
-side, `jpegio.register_lvgl_decoder()` and `jpegio.lvgl_decoders()` exist on
-every build and report what happened.
+jpegio lives in micropython-pydevices' `modules/jpegio` (it was part of
+displayif until 2026-10-06). Both of this module's build files print a note
+when jpegio isn't in the build, so you are told at build time rather than
+finding out from a blank image. From jpegio's side,
+`jpegio.register_lvgl_decoder()` and `jpegio.lvgl_decoders()` exist on every
+build and report what happened.
 
 ## Build with other user C modules (optional)
 
@@ -122,10 +121,10 @@ manifest that `include()`s several such files builds them all.
 port, with upstream's own boards:
 
 ```bash
-micropython-pydevices/build_mp.py --port unix --variant pydevices --modules displayif,lvgl-micropython
+micropython-pydevices/build_mp.py --port unix --variant pydevices --modules displayif,jpegio,lvgl-micropython
 ```
 
-displayif comes along for JPEG: it owns the TJpgDec decoder LVGL draws JPEGs
+jpegio comes along for JPEG: it owns the TJpgDec decoder LVGL draws JPEGs
 through.
 
 ## App Usage & Timer Model

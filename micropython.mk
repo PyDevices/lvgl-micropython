@@ -32,16 +32,15 @@ $(error $(BINDINGS_DIR) does not match pinned binding inputs $(LV_BINDINGS_PIN);
 endif
 
 # jpegio Phase 2 moved the JPEG decoder out of LVGL: LV_USE_TJPGD is 0 in the
-# bindings (lvgl-bindings aa6c6bc), and displayif's jpegio registers its own
+# bindings (lvgl-bindings aa6c6bc), and the jpegio module registers its own
 # TJpgDec with LVGL instead, so a firmware carries one decoder rather than two.
-# Built without displayif, this module therefore decodes PNG and LVGL's BIN and
-# draws nothing at all for a JPEG -- silently, at run time. Say so at build
-# time instead (#11).
-LVMP_DISPLAYIF := $(if $(findstring displayif,$(USER_C_MODULES)),1,$(if $(wildcard $(LVMP_DIR)/../displayif),1,))
-ifeq ($(LVMP_DISPLAYIF),)
-$(info lvgl-micropython: no displayif in this build -- lv.image will not draw a JPEG.)
-$(info   displayif owns the TJpgDec decoder since jpegio Phase 2; PNG and LVGL BIN still decode.)
-$(info   Add displayif to USER_C_MODULES for JPEG.)
+# Built without jpegio (micropython-pydevices' modules/jpegio since 2026-10-06;
+# displayif's before), this module decodes PNG and LVGL's BIN and draws nothing
+# at all for a JPEG -- silently, at run time. Say so at build time instead (#11).
+ifeq ($(findstring jpegio,$(USER_C_MODULES)),)
+$(info lvgl-micropython: no jpegio in this build -- lv.image will not draw a JPEG.)
+$(info   jpegio owns the TJpgDec decoder; PNG and LVGL BIN still decode.)
+$(info   Name jpegio as well for JPEG (build_mp.py --modules jpegio,lvgl-micropython).)
 endif
 
 # LVGL is available on every port, but its desktop/host-GUI and OS-specific

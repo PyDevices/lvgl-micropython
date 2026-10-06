@@ -6,6 +6,15 @@
 
 LVMP_DIR := $(USERMOD_DIR)
 BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lvgl-bindings)
+# No sibling checkout (a clone outside the PyDevices workspace): fetch the
+# pinned bindings into .deps/, only what this module compiles.
+ifeq ($(wildcard $(BINDINGS_DIR)/lv_conf.h),)
+BINDINGS_DIR := $(abspath $(LVMP_DIR)/.deps/lvgl-bindings)
+LVMP_FETCH := $(shell bash $(LVMP_DIR)/scripts/fetch_bindings.sh 1>&2; echo $$?)
+ifeq ($(wildcard $(BINDINGS_DIR)/lv_conf.h),)
+$(error lvgl-micropython: fetching lvgl-bindings failed (scripts/fetch_bindings.sh exit $(LVMP_FETCH)); set BINDINGS_DIR to a checkout of the commit in LVGL_BINDINGS_COMMIT)
+endif
+endif
 LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")

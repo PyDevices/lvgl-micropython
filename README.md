@@ -9,7 +9,9 @@ This repo is a consumer/build repo for the LVGL stack: it consumes generated bin
 
 Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) whose generated binding inputs match the exact commit recorded in `LVGL_BINDINGS_COMMIT`. The Make and CMake integrations reject a mismatched source, LVGL pin, or configuration.
 
-**Synced from lvgl-bindings:** `lib/display_driver.py` and `lib/fs_driver.py` are synced from [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) at the commit pinned in `LVGL_BINDINGS_COMMIT`, along with the generated bindings. Do not edit them here — change them in lvgl-bindings and re-sync.
+**Synced from lvgl-bindings:** `lib/fs_driver.py` is synced from [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) at the commit pinned in `LVGL_BINDINGS_COMMIT`, along with the generated bindings. Do not edit it here — change it in lvgl-bindings and re-sync.
+
+**`display_driver` is not here.** LVGL's PyDevices coordinator lives in [pydevices `lib/`](https://github.com/PyDevices/pydevices/blob/main/lib/display_driver.py) and comes with `pydevices` (`mip.install("pydevices", index="https://PyDevices.github.io/mip")`, or frozen by micropython-pydevices' `--modules pydevices`), beside the `appdev`, `events`, `keys` and `multimer` it needs.
 
 ## Documentation
 
@@ -59,7 +61,7 @@ include("/path/to/lvgl-micropython/manifest.py")
 On unix that manifest is `ports/unix/variants/standard/manifest.py`; on esp32
 and rp2 it is usually `ports/<port>/boards/manifest.py`, unless your board
 brings its own. Then build as usual. The include brings in the `lvgl` C module
-and freezes two helpers, `display_driver` and `fs_driver`. If lvgl-bindings is
+and freezes `fs_driver`. If lvgl-bindings is
 not a sibling, pass `BINDINGS_DIR=/path/to/lvgl-bindings` to `make` on a Make
 port. The build stops if that checkout does not match the pin. Tested on the
 unix port against MicroPython v1.29.0, where `import lvgl` reports 9.5.
@@ -129,7 +131,7 @@ through.
 
 ## App Usage & Timer Model
 
-In MicroPython, `display_driver` uses `machine.Timer` (hardware interrupts):
+With pydevices installed, pydevices' `display_driver` drives LVGL from `machine.Timer` (hardware interrupts):
 - **Interactive REPL (`micropython -i` or on-board prompt)**: Simply create widgets and drop out to the prompt. Hardware timer interrupts keep LVGL animations, timers, and touch input running continuously in the background while you inspect variables or test code interactively.
 - **Standalone Scripts**: Use `app.run()` if you need an explicit loop for non-interactive desktop scripts.
 
@@ -161,8 +163,8 @@ The smoke suite belongs to the exact pinned `lvgl-bindings` source; this repo do
 | `micropython.mk` | Make ports (pre-1.29: `USER_C_MODULES` = parent directory) |
 | `micropython.cmake` | CMake ports (pre-1.29: `USER_C_MODULES` = this repo) |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
-| `manifest.py` | Names the C module and freezes `lib/display_driver.py`, `lib/fs_driver.py` (synced from lvgl-bindings) |
-| `lib/display_driver.py` | Vendored PyDevices LVGL glue (`import display_driver`) |
+| `manifest.py` | Names the C module and freezes `lib/fs_driver.py` (synced from lvgl-bindings) |
+| `lib/fs_driver.py` | Python-backed LVGL filesystem driver (`import fs_driver`) |
 | `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source consumed by builds |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh helpers and record an exact commit/tag |
 

@@ -12,8 +12,9 @@ consumes an exact sibling checkout of
 
 ## Start by using the firmware entrypoint
 
-On firmware built with this module, an application starts with the synced
-display helper:
+On firmware built with this module and with
+[pydevices](https://github.com/PyDevices/pydevices) installed, an application
+starts with pydevices' display helper:
 
 ```python
 import display_driver
@@ -26,9 +27,9 @@ label = lv.label(button)
 label.set_text("Hello MicroPython LVGL!")
 ```
 
-`display_driver` wires the display, input, and timer integration. It needs
-pydevices' `appdev`, `events`, and `keys` on the device, plus a `board_config`
-unless your code has already created an `appdev.App`. At an interactive
+`display_driver` wires the display, input, and timer integration. It comes
+with pydevices, beside the `appdev`, `events`, and `keys` it needs, and wants a
+`board_config` unless your code has already created an `appdev.App`. At an interactive
 MicroPython prompt, hardware timer callbacks keep LVGL active after the script
 reaches the prompt.
 
@@ -44,13 +45,13 @@ lvgl-micropython build glue + GC-aware allocator
 MicroPython firmware module: import lvgl
                          |
                          v
-synced display_driver helper -> display/input/timers
+pydevices' display_driver -> display/input/timers
 ```
 
 The Make and CMake integrations reject a mismatched binding source, LVGL pin, or
 generated configuration. Update `lvgl-bindings` first, then re-sync here; do not
 hand-edit the generated binding inputs or the synced
-`display_driver.py`/`fs_driver.py` copies.
+`fs_driver.py` copy.
 
 ## Repository map
 
@@ -60,7 +61,6 @@ hand-edit the generated binding inputs or the synced
 | `micropython.cmake` | CMake-port user-module entrypoint. |
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator. |
 | `src/lvgl_micropython_build.c` | `lvgl_micropython.__revision__` build stamp. |
-| `lib/display_driver.py` | Synced display, input, and timer helper. |
 | `lib/fs_driver.py` | Synced LVGL filesystem helper. |
 | `LVGL_BINDINGS_COMMIT` | Exact generated-binding source commit. |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh synced helpers and recorded source. |

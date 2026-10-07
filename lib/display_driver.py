@@ -1660,9 +1660,18 @@ class DisplayDriver:
                 )
             except Exception:
                 synced = False
-        if last and not synced:
+        if last:
+            # The frame is out: by show() when flush_rect could not sync it,
+            # otherwise flush_rect already did and frame_done() says so (a
+            # no-op unless the panel's measure_fps is on). Either way it is
+            # one present, however many areas it took.
             try:
-                panel.show()
+                if synced:
+                    frame_done = getattr(panel, "frame_done", None)
+                    if frame_done is not None:
+                        frame_done()
+                else:
+                    panel.show()
                 self.presents += 1
             except Exception:
                 pass

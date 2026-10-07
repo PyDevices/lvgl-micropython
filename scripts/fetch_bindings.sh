@@ -5,8 +5,8 @@
 # blobless, so it downloads tens of MB rather than LVGL's whole history.
 #
 # The build runs this itself when there is no BINDINGS_DIR and no
-# lvgl-bindings checkout beside this one (a clone outside the PyDevices
-# workspace); in the workspace the sibling wins and this never runs.
+# lvgl-bindings checkout beside this one (a clone on its own); with a
+# sibling checkout the sibling wins and this never runs.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DEST="$HERE/.deps/lvgl-bindings"

@@ -89,7 +89,9 @@ CFLAGS_USERMOD += -DLVMP_REVISION='"$(LVMP_REVISION)"'
 # With LV_USE_FLOAT=1, upstream LVGL trips -Werror=double-promotion / float-conversion.
 # Port Makefiles (unix/webassembly) append -Wdouble-promotion after CFLAGS_USERMOD,
 # so put the suppress on the LVGL object rules (same idea as circuitpython.mk).
-LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion
+# GCC 16 also counts a variable only ever incremented as set-but-unused
+# (lv_buttonmatrix.c's txt_tot_i), which older GCC did not.
+LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion -Wno-unused-but-set-variable
 # The object name a user-module source lands under is not the same on every
 # MicroPython. Up to v1.28.0 the USER_C_MODULES prefix was stripped, so the
 # object was $(BUILD)/lvgl-bindings/lvgl/src/....o; v1.29.0 keeps the absolute
@@ -101,7 +103,9 @@ LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion
 # the module>, whatever USER_C_MODULES was (a parent directory, or the module
 # directories themselves from c_module()); derive it from this module's own
 # directory rather than from USER_C_MODULES.
-LVMP_OBJ = $(BUILD)/$(patsubst $(LVMP_DIR)/%,$(notdir $(LVMP_DIR))/%,$(1)) $(BUILD)/$(1)
+# The second spelling can't be a target on Windows: a path with a drive (C:/...) under
+# $(BUILD) holds a second colon, which make reads as a static pattern rule.
+LVMP_OBJ = $(BUILD)/$(patsubst $(LVMP_DIR)/%,$(notdir $(LVMP_DIR))/%,$(1)) $(if $(findstring :,$(1)),,$(BUILD)/$(1))
 $(foreach s,$(SOURCES),\
 	$(eval $(call LVMP_OBJ,$(s:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS)))
 $(eval $(call LVMP_OBJ,$(LVMP_C:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS))

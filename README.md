@@ -19,6 +19,8 @@ See [docs/](docs/index.md).
 
 This repo is mostly glue: it wires LVGL into MicroPython builds and exposes the interpreter hooks that the firmware needs. In practice, you usually change the build glue or allocator here when the port itself changes, but you do not regenerate the bindings here. If the binding layer changed, update **`lvgl-bindings`** first and then rebuild this module against the new generated file.
 
+What's planned next is in [ROADMAP.md](ROADMAP.md).
+
 ## Workspace layout
 
 ```

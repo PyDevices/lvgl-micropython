@@ -6,7 +6,7 @@
 
 LVMP_DIR := $(USERMOD_DIR)
 BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lvgl-bindings)
-# No sibling checkout (a clone outside the PyDevices workspace): fetch the
+# No sibling checkout (a clone on its own): fetch the
 # pinned bindings into .deps/, only what this module compiles.
 ifeq ($(wildcard $(BINDINGS_DIR)/lv_conf.h),)
 BINDINGS_DIR := $(abspath $(LVMP_DIR)/.deps/lvgl-bindings)

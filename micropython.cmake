@@ -11,7 +11,7 @@ set(LVMP_DIR ${CMAKE_CURRENT_LIST_DIR})
 get_filename_component(WORKSPACE_DIR ${LVMP_DIR} DIRECTORY)
 if(NOT DEFINED BINDINGS_DIR)
     set(BINDINGS_DIR ${WORKSPACE_DIR}/lvgl-bindings)
-    # No sibling checkout (a clone outside the PyDevices workspace): fetch the
+    # No sibling checkout (a clone on its own): fetch the
     # pinned bindings into .deps/, only what this module compiles.
     if(NOT EXISTS ${BINDINGS_DIR}/lv_conf.h)
         set(BINDINGS_DIR ${LVMP_DIR}/.deps/lvgl-bindings)

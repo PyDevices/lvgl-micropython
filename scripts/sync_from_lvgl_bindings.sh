@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync the hand-written Python helpers (display_driver.py, fs_driver.py)
+# Sync the hand-written Python helper (fs_driver.py)
 # from PyDevices/lvgl-bindings on GitHub (not the local workspace).
 #
 # Usage:
@@ -45,7 +45,7 @@ TMP=$(mktemp -d)
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
-HELPERS=(display_driver.py fs_driver.py)
+HELPERS=(fs_driver.py)
 
 echo "Fetching ${LV_BINDINGS_REPO} @ ${REF}..."
 git clone --filter=blob:none --no-checkout "${LV_BINDINGS_REPO}" "${TMP}/lvgl-bindings"

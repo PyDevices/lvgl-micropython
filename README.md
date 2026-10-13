@@ -7,7 +7,7 @@ bindings boundary, runtime entrypoint, and MicroPython integration map.
 
 This repo is a consumer/build repo for the LVGL stack: it consumes generated bindings from lvgl-bindings and rebuilds MicroPython targets, but does not publish its own package. See [lvgl-bindings — The LVGL family](https://github.com/PyDevices/lvgl-bindings#the-lvgl-family) for how the family fits together.
 
-Requires a sibling clone of [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) whose generated binding inputs match the exact commit recorded in `LVGL_BINDINGS_COMMIT`. The Make and CMake integrations reject a mismatched source, LVGL pin, or configuration.
+It builds against [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings): the checkout you name with `BINDINGS_DIR`, else one beside this repository, else the commit in `LVGL_BINDINGS_COMMIT`, which the build fetches for you. See [Build](#build).
 
 **Synced from lvgl-bindings:** `lib/fs_driver.py` is synced from [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) at the commit pinned in `LVGL_BINDINGS_COMMIT`, along with the generated bindings. Do not edit it here — change it in lvgl-bindings and re-sync.
 
@@ -41,10 +41,25 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ## Build
 
-You need [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) beside
-this repository, checked out at the commit in
-[LVGL_BINDINGS_COMMIT](LVGL_BINDINGS_COMMIT) with its `lvgl` submodule. Its
-generated binding is committed, so there is nothing to generate:
+The build finds [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings)
+in one of three places, the first that exists:
+
+1. `BINDINGS_DIR`, on `make`'s command line or in the environment (CMake ports
+   read it from the environment or `-DBINDINGS_DIR=`). A firmware build that
+   pins lvgl-bindings itself, such as
+   [micropython-pydevices](https://github.com/PyDevices/micropython-pydevices),
+   sets it.
+2. An `lvgl-bindings` checkout beside this repository, with its `lvgl`
+   submodule.
+3. Neither: the build fetches the commit in
+   [LVGL_BINDINGS_COMMIT](LVGL_BINDINGS_COMMIT) into `.deps/lvgl-bindings`,
+   with only what it compiles. You need nothing but `git`.
+
+Its generated binding is committed, so there is nothing to generate. A
+checkout you named or put beside this one is built as it is: if its generated
+binding, `lvgl` or `lv_conf.h` differ from the pinned commit, the build prints
+a note saying which commit it is building and carries on. To build exactly
+the pinned bindings from a checkout of your own:
 
 ```bash
 git clone https://github.com/PyDevices/lvgl-micropython
@@ -63,9 +78,7 @@ include("/path/to/lvgl-micropython/manifest.py")
 On unix that manifest is `ports/unix/variants/standard/manifest.py`; on esp32
 and rp2 it is usually `ports/<port>/boards/manifest.py`, unless your board
 brings its own. Then build as usual. The include brings in the `lvgl` C module
-and freezes `fs_driver`. If lvgl-bindings is
-not a sibling, pass `BINDINGS_DIR=/path/to/lvgl-bindings` to `make` on a Make
-port. The build stops if that checkout does not match the pin. Tested on the
+and freezes `fs_driver`. Tested on the
 unix port against MicroPython v1.29.0, where `import lvgl` reports 9.5.
 
 If you would rather not edit the MicroPython tree, write a manifest of your own
@@ -167,7 +180,8 @@ The smoke suite belongs to the exact pinned `lvgl-bindings` source; this repo do
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Names the C module and freezes `lib/fs_driver.py` (synced from lvgl-bindings) |
 | `lib/fs_driver.py` | Python-backed LVGL filesystem driver (`import fs_driver`) |
-| `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source consumed by builds |
+| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit a build fetches when you give it no checkout |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh helpers and record an exact commit/tag |
+| `scripts/fetch_bindings.sh` | Fetch the pinned lvgl-bindings into `.deps/` (the build runs it) |
 
 CircuitPython integration lives in [lvgl-circuitpython](https://github.com/PyDevices/lvgl-circuitpython).

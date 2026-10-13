@@ -6,9 +6,9 @@ files, a GC-aware allocator, and the Python display helpers used by an
 application.
 
 It does not publish a standalone package and it does not generate bindings. It
-consumes an exact sibling checkout of
-[lvgl-bindings](https://github.com/PyDevices/lvgl-bindings), recorded in
-`LVGL_BINDINGS_COMMIT`.
+consumes [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings): a
+checkout you name with `BINDINGS_DIR`, one beside this repo, or else the
+commit in `LVGL_BINDINGS_COMMIT`, which the build fetches.
 
 ## Start by using the firmware entrypoint
 
@@ -48,10 +48,11 @@ MicroPython firmware module: import lvgl
 pydevices' display_driver -> display/input/timers
 ```
 
-The Make and CMake integrations reject a mismatched binding source, LVGL pin, or
-generated configuration. Update `lvgl-bindings` first, then re-sync here; do not
-hand-edit the generated binding inputs or the synced
-`fs_driver.py` copy.
+A checkout you supply is built as it is; when its generated binding, LVGL or
+`lv_conf.h` differ from `LVGL_BINDINGS_COMMIT`, the build prints a note naming
+the commit it is building. Only the copy the build fetches for itself must
+match the pin. Update `lvgl-bindings` first, then re-sync here; do not
+hand-edit the generated binding inputs or the synced `fs_driver.py` copy.
 
 ## Repository map
 
@@ -62,7 +63,8 @@ hand-edit the generated binding inputs or the synced
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator. |
 | `src/lvgl_micropython_build.c` | `lvgl_micropython.__revision__` build stamp. |
 | `lib/fs_driver.py` | Synced LVGL filesystem helper. |
-| `LVGL_BINDINGS_COMMIT` | Exact generated-binding source commit. |
+| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit fetched when no checkout is given. |
+| `scripts/fetch_bindings.sh` | Fetches that commit into `.deps/`; the build runs it. |
 | `scripts/sync_from_lvgl_bindings.sh` | Refresh synced helpers and recorded source. |
 | `tests/` | GC finalizer and integration tests. |
 

@@ -15,7 +15,7 @@ This repo does **not** regenerate bindings. It consumes
 | `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
 | `manifest.py` | Optional frozen Python modules |
 | `docs/` | This documentation |
-| `LVGL_BINDINGS_COMMIT` | Exact generator/artifact source required by Make and CMake |
+| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit a build fetches when it has no checkout to use |
 
 ## Build
 
@@ -27,6 +27,11 @@ make USER_C_MODULES=../../.. FROZEN_MANIFEST=../../../lvgl-micropython/manifest.
 ```
 
 CMake ports (esp32, rp2): point `USER_C_MODULES` at **this repo**.
+
+The bindings come from `BINDINGS_DIR` if you set it, else an `lvgl-bindings`
+checkout beside this repo, else the commit in `LVGL_BINDINGS_COMMIT`, fetched
+into `.deps/`. A checkout you supply is built as it is, with a note when it
+differs from the pin; see the [README](../README.md#build).
 
 On MicroPython 1.29+, `manifest.py` names the C module itself via `c_module()`, so adding `include("<path to lvgl-micropython>/manifest.py")` to your own manifest builds it alongside other user C modules.
 

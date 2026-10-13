@@ -9,16 +9,32 @@
 
 set(LVMP_DIR ${CMAKE_CURRENT_LIST_DIR})
 get_filename_component(WORKSPACE_DIR ${LVMP_DIR} DIRECTORY)
-if(NOT DEFINED BINDINGS_DIR)
-    set(BINDINGS_DIR ${WORKSPACE_DIR}/lvgl-bindings)
-    # No sibling checkout (a clone on its own): fetch the
-    # pinned bindings into .deps/, only what this module compiles.
+# Where lvgl-bindings comes from, first match wins:
+#   1. BINDINGS_DIR, as a CMake variable or in the environment (a firmware
+#      build that pins lvgl-bindings itself sets it);
+#   2. an lvgl-bindings checkout beside this one;
+#   3. the commit in LVGL_BINDINGS_COMMIT, fetched into .deps/ with only what
+#      this module compiles (a clone on its own).
+# The first two build the checkout as it is: if it isn't at the pinned commit,
+# the build says so and carries on. Only the fetched copy must match the pin.
+if(NOT DEFINED BINDINGS_DIR AND NOT "$ENV{BINDINGS_DIR}" STREQUAL "")
+    set(BINDINGS_DIR $ENV{BINDINGS_DIR})
+endif()
+if(DEFINED BINDINGS_DIR)
+    get_filename_component(BINDINGS_DIR ${BINDINGS_DIR} ABSOLUTE)
+    set(LVMP_BINDINGS_FROM "BINDINGS_DIR")
     if(NOT EXISTS ${BINDINGS_DIR}/lv_conf.h)
-        set(BINDINGS_DIR ${LVMP_DIR}/.deps/lvgl-bindings)
-        execute_process(COMMAND bash ${LVMP_DIR}/scripts/fetch_bindings.sh RESULT_VARIABLE _lvmp_fetch_rc)
-        if(NOT EXISTS ${BINDINGS_DIR}/lv_conf.h)
-            message(FATAL_ERROR "lvgl-micropython: fetching lvgl-bindings failed (scripts/fetch_bindings.sh exit ${_lvmp_fetch_rc}); set BINDINGS_DIR to a checkout of the commit in LVGL_BINDINGS_COMMIT")
-        endif()
+        message(FATAL_ERROR "lvgl-micropython: BINDINGS_DIR=${BINDINGS_DIR} is not an lvgl-bindings checkout (no lv_conf.h)")
+    endif()
+elseif(EXISTS ${WORKSPACE_DIR}/lvgl-bindings/lv_conf.h)
+    set(BINDINGS_DIR ${WORKSPACE_DIR}/lvgl-bindings)
+    set(LVMP_BINDINGS_FROM "the lvgl-bindings beside lvgl-micropython")
+else()
+    set(BINDINGS_DIR ${LVMP_DIR}/.deps/lvgl-bindings)
+    set(LVMP_BINDINGS_FROM "pin")
+    execute_process(COMMAND bash ${LVMP_DIR}/scripts/fetch_bindings.sh RESULT_VARIABLE _lvmp_fetch_rc)
+    if(NOT EXISTS ${BINDINGS_DIR}/lv_conf.h)
+        message(FATAL_ERROR "lvgl-micropython: fetching lvgl-bindings failed (scripts/fetch_bindings.sh exit ${_lvmp_fetch_rc}); set BINDINGS_DIR to an lvgl-bindings checkout")
     endif()
 endif()
 set(LVMP_C ${BINDINGS_DIR}/generated/lvgl_micropython.c)
@@ -27,15 +43,39 @@ file(GLOB_RECURSE SOURCES ${LVGL_DIR}/src/*.c)
 
 file(STRINGS ${LVMP_DIR}/LVGL_BINDINGS_COMMIT LV_BINDINGS_PIN LIMIT_COUNT 1)
 execute_process(
-    COMMAND git -C ${BINDINGS_DIR} diff --quiet ${LV_BINDINGS_PIN} -- generated/lvgl_micropython.c lvgl lv_conf.h
-    RESULT_VARIABLE LV_BINDINGS_COMMITTED_DIFF
+    COMMAND git -C ${BINDINGS_DIR} cat-file -e ${LV_BINDINGS_PIN}^{commit}
+    RESULT_VARIABLE LV_BINDINGS_HAS_PIN
+    OUTPUT_QUIET ERROR_QUIET
 )
-execute_process(
-    COMMAND git -C ${BINDINGS_DIR} diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h
-    RESULT_VARIABLE LV_BINDINGS_WORKTREE_DIFF
-)
+set(LV_BINDINGS_COMMITTED_DIFF 1)
+set(LV_BINDINGS_WORKTREE_DIFF 1)
+if(LV_BINDINGS_HAS_PIN EQUAL 0)
+    execute_process(
+        COMMAND git -C ${BINDINGS_DIR} diff --quiet ${LV_BINDINGS_PIN} -- generated/lvgl_micropython.c lvgl lv_conf.h
+        RESULT_VARIABLE LV_BINDINGS_COMMITTED_DIFF
+    )
+    execute_process(
+        COMMAND git -C ${BINDINGS_DIR} diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h
+        RESULT_VARIABLE LV_BINDINGS_WORKTREE_DIFF
+    )
+endif()
 if(NOT LV_BINDINGS_COMMITTED_DIFF EQUAL 0 OR NOT LV_BINDINGS_WORKTREE_DIFF EQUAL 0)
-    message(FATAL_ERROR "${BINDINGS_DIR} does not match pinned binding inputs ${LV_BINDINGS_PIN}")
+    if(LVMP_BINDINGS_FROM STREQUAL "pin")
+        message(FATAL_ERROR "${BINDINGS_DIR} does not match pinned binding inputs ${LV_BINDINGS_PIN}; delete it and build again to refetch")
+    endif()
+    execute_process(
+        COMMAND git -C ${BINDINGS_DIR} describe --always --dirty --abbrev=12
+        OUTPUT_VARIABLE LV_BINDINGS_HEAD
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT LV_BINDINGS_HEAD)
+        set(LV_BINDINGS_HEAD "not a git checkout")
+    endif()
+    message(NOTICE
+        "lvgl-micropython: note: building lvgl-bindings from ${BINDINGS_DIR} "
+        "(${LVMP_BINDINGS_FROM}) at ${LV_BINDINGS_HEAD}, whose generated binding, "
+        "lvgl or lv_conf.h differ from LVGL_BINDINGS_COMMIT ${LV_BINDINGS_PIN}. "
+        "Building it as it is.")
 endif()
 
 # LVGL is available on every port, but its desktop/host-GUI and OS-specific

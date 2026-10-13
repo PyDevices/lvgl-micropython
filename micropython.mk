@@ -5,30 +5,51 @@
 #     make USER_C_MODULES=<path to workspace root>
 
 LVMP_DIR := $(USERMOD_DIR)
-BINDINGS_DIR ?= $(abspath $(LVMP_DIR)/../lvgl-bindings)
-# No sibling checkout (a clone on its own): fetch the
-# pinned bindings into .deps/, only what this module compiles.
+# Where lvgl-bindings comes from, first match wins:
+#   1. BINDINGS_DIR, from make's command line or the environment (a firmware
+#      build that pins lvgl-bindings itself sets it);
+#   2. an lvgl-bindings checkout beside this one;
+#   3. the commit in LVGL_BINDINGS_COMMIT, fetched into .deps/ with only what
+#      this module compiles (a clone on its own).
+# The first two build the checkout as it is: if it isn't at the pinned commit,
+# the build says so and carries on. Only the fetched copy must match the pin.
+ifneq ($(strip $(BINDINGS_DIR)),)
+BINDINGS_DIR := $(abspath $(BINDINGS_DIR))
+LVMP_BINDINGS_FROM := BINDINGS_DIR
 ifeq ($(wildcard $(BINDINGS_DIR)/lv_conf.h),)
+$(error lvgl-micropython: BINDINGS_DIR=$(BINDINGS_DIR) is not an lvgl-bindings checkout (no lv_conf.h))
+endif
+else ifneq ($(wildcard $(LVMP_DIR)/../lvgl-bindings/lv_conf.h),)
+BINDINGS_DIR := $(abspath $(LVMP_DIR)/../lvgl-bindings)
+LVMP_BINDINGS_FROM := the lvgl-bindings beside lvgl-micropython
+else
 BINDINGS_DIR := $(abspath $(LVMP_DIR)/.deps/lvgl-bindings)
+LVMP_BINDINGS_FROM := pin
 LVMP_FETCH := $(shell bash $(LVMP_DIR)/scripts/fetch_bindings.sh 1>&2; echo $$?)
 ifeq ($(wildcard $(BINDINGS_DIR)/lv_conf.h),)
-$(error lvgl-micropython: fetching lvgl-bindings failed (scripts/fetch_bindings.sh exit $(LVMP_FETCH)); set BINDINGS_DIR to a checkout of the commit in LVGL_BINDINGS_COMMIT)
+$(error lvgl-micropython: fetching lvgl-bindings failed (scripts/fetch_bindings.sh exit $(LVMP_FETCH)); set BINDINGS_DIR to an lvgl-bindings checkout)
 endif
 endif
 LVMP_C := $(BINDINGS_DIR)/generated/lvgl_micropython.c
 LVGL_DIR := $(BINDINGS_DIR)/lvgl
 SOURCES = $(shell find $(LVGL_DIR)/src -type f -name "*.c")
 LV_BINDINGS_PIN := $(strip $(shell cat $(LVMP_DIR)/LVGL_BINDINGS_COMMIT 2>/dev/null))
-LV_BINDINGS_DIRTY := $(shell \
-	git -C $(BINDINGS_DIR) cat-file -e $(LV_BINDINGS_PIN)^{commit} 2>/dev/null && \
-	git -C $(BINDINGS_DIR) diff --quiet $(LV_BINDINGS_PIN) -- generated/lvgl_micropython.c lvgl lv_conf.h && \
-	git -C $(BINDINGS_DIR) diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h || echo 1)
-
 ifeq ($(LV_BINDINGS_PIN),)
 $(error Missing $(LVMP_DIR)/LVGL_BINDINGS_COMMIT)
 endif
-ifneq ($(LV_BINDINGS_DIRTY),)
-$(error $(BINDINGS_DIR) does not match pinned binding inputs $(LV_BINDINGS_PIN); check out that commit/tag or run scripts/sync_from_lvgl_bindings.sh with an exact ref)
+# 1 when the binding inputs are exactly the pinned commit's, with nothing
+# uncommitted on top.
+LV_BINDINGS_AT_PIN := $(shell \
+	git -C $(BINDINGS_DIR) cat-file -e $(LV_BINDINGS_PIN)^{commit} 2>/dev/null && \
+	git -C $(BINDINGS_DIR) diff --quiet $(LV_BINDINGS_PIN) -- generated/lvgl_micropython.c lvgl lv_conf.h && \
+	git -C $(BINDINGS_DIR) diff --quiet -- generated/lvgl_micropython.c lvgl lv_conf.h && echo 1)
+ifeq ($(LV_BINDINGS_AT_PIN),)
+ifeq ($(LVMP_BINDINGS_FROM),pin)
+$(error $(BINDINGS_DIR) does not match pinned binding inputs $(LV_BINDINGS_PIN); delete it and build again to refetch)
+endif
+LV_BINDINGS_HEAD := $(shell git -C $(BINDINGS_DIR) describe --always --dirty --abbrev=12 2>/dev/null || echo "not a git checkout")
+$(info lvgl-micropython: note: building lvgl-bindings from $(BINDINGS_DIR) ($(LVMP_BINDINGS_FROM)) at $(LV_BINDINGS_HEAD),)
+$(info   whose generated binding, lvgl or lv_conf.h differ from LVGL_BINDINGS_COMMIT $(LV_BINDINGS_PIN). Building it as it is.)
 endif
 
 # jpegio Phase 2 moved the JPEG decoder out of LVGL: LV_USE_TJPGD is 0 in the

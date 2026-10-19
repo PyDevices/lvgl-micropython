@@ -126,7 +126,15 @@ LVMP_FLOAT_CFLAGS := -Wno-double-promotion -Wno-float-conversion -Wno-unused-but
 # directory rather than from USER_C_MODULES.
 # The second spelling can't be a target on Windows: a path with a drive (C:/...) under
 # $(BUILD) holds a second colon, which make reads as a static pattern rule.
-LVMP_OBJ = $(BUILD)/$(patsubst $(LVMP_DIR)/%,$(notdir $(LVMP_DIR))/%,$(1)) $(if $(findstring :,$(1)),,$(BUILD)/$(1))
+# lvgl-bindings is often not inside this module (a sibling checkout, or the one
+# a firmware build hands over in BINDINGS_DIR), and py.mk only shortens paths
+# under a module directory, so its objects kept the absolute path and, on
+# Windows, the drive's colon. Register it as a module directory too: its
+# objects become $(BUILD)/<bindings dir basename>/..., like a module's.
+ifeq ($(filter $(LVMP_DIR)/%,$(BINDINGS_DIR)),)
+USERMOD_DIRS += $(BINDINGS_DIR)
+endif
+LVMP_OBJ = $(BUILD)/$(patsubst $(BINDINGS_DIR)/%,$(notdir $(BINDINGS_DIR))/%,$(patsubst $(LVMP_DIR)/%,$(notdir $(LVMP_DIR))/%,$(1))) $(if $(findstring :,$(1)),,$(BUILD)/$(1))
 $(foreach s,$(SOURCES),\
 	$(eval $(call LVMP_OBJ,$(s:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS)))
 $(eval $(call LVMP_OBJ,$(LVMP_C:.c=.o)): CFLAGS += $(LVMP_FLOAT_CFLAGS))

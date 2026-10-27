@@ -1,187 +1,53 @@
+![A blue button reading Hello from LVGL on a light gray background](docs/images/hello.png)
+
 # lvgl-micropython
 
-MicroPython user C module glue for LVGL: `micropython.mk`, CMake usermod, GC-aware allocator, and smoke tests.
+lvgl-micropython is the part of OmniPython that builds LVGL into MicroPython-compatible firmware as a user C module, so `import lvgl as lv` works on any MicroPython port.
 
-New here? Read the [newcomer's guide](docs/newcomers.md) for the generated-
-bindings boundary, runtime entrypoint, and MicroPython integration map.
-
-This repo is a consumer/build repo for the LVGL stack: it consumes generated bindings from lvgl-bindings and rebuilds MicroPython targets, but does not publish its own package. See [lvgl-bindings — The LVGL family](https://github.com/PyDevices/lvgl-bindings#the-lvgl-family) for how the family fits together.
-
-It builds against [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings): the checkout you name with `BINDINGS_DIR`, else one beside this repository, else the commit in `LVGL_BINDINGS_COMMIT`, which the build fetches for you. See [Build](#build).
-
-**Synced from lvgl-bindings:** `lib/fs_driver.py` is synced from [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings) at the commit pinned in `LVGL_BINDINGS_COMMIT`, along with the generated bindings. Do not edit it here — change it in lvgl-bindings and re-sync.
-
-**`display_driver` is not here.** LVGL's PyDevices coordinator lives in [pydevices `lib/`](https://github.com/PyDevices/pydevices/blob/main/lib/display_driver.py) and comes with `pydevices` (`mip.install("pydevices", index="https://PyDevices.github.io/mip")`, or frozen by micropython-pydevices' `--modules pydevices`), beside the `appdev`, `events`, `keys` and `multimer` it needs.
-
-## Documentation
-
-See [docs/](docs/index.md).
-
-This repo is mostly glue: it wires LVGL into MicroPython builds and exposes the interpreter hooks that the firmware needs. In practice, you usually change the build glue or allocator here when the port itself changes, but you do not regenerate the bindings here. If the binding layer changed, update **`lvgl-bindings`** first and then rebuild this module against the new generated file.
-
-What's planned next is in [ROADMAP.md](ROADMAP.md).
-
-## Workspace layout
-
-```
-workspace/
-  lvgl-micropython/     ← this repo
-  lvgl-bindings/
-  micropython/             ← for builds
-```
-
-## Generate bindings
-
-```bash
-cd lvgl-bindings
-git submodule update --init lvgl
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-./regenerate_all.sh --target micropython
-```
-
-## Build
-
-The build finds [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings)
-in one of three places, the first that exists:
-
-1. `BINDINGS_DIR`, on `make`'s command line or in the environment (CMake ports
-   read it from the environment or `-DBINDINGS_DIR=`). A firmware build that
-   pins lvgl-bindings itself, such as
-   [micropython-pydevices](https://github.com/PyDevices/micropython-pydevices),
-   sets it.
-2. An `lvgl-bindings` checkout beside this repository, with its `lvgl`
-   submodule.
-3. Neither: the build fetches the commit in
-   [LVGL_BINDINGS_COMMIT](LVGL_BINDINGS_COMMIT) into `.deps/lvgl-bindings`,
-   with only what it compiles. You need nothing but `git`.
-
-Its generated binding is committed, so there is nothing to generate. A
-checkout you named or put beside this one is built as it is: if its generated
-binding, `lvgl` or `lv_conf.h` differ from the pinned commit, the build prints
-a note saying which commit it is building and carries on. To build exactly
-the pinned bindings from a checkout of your own:
-
-```bash
-git clone https://github.com/PyDevices/lvgl-micropython
-git clone https://github.com/PyDevices/lvgl-bindings
-git -C lvgl-bindings checkout "$(cat lvgl-micropython/LVGL_BINDINGS_COMMIT)"
-git -C lvgl-bindings submodule update --init lvgl
-```
-
-On MicroPython 1.29 or later, add one line to the manifest your build already
-uses:
+Add the module to the manifest your build already uses (MicroPython 1.29 or later), then build as usual. For the unix port, that manifest is `ports/unix/variants/standard/manifest.py`:
 
 ```python
 include("/path/to/lvgl-micropython/manifest.py")
 ```
 
-On unix that manifest is `ports/unix/variants/standard/manifest.py`; on esp32
-and rp2 it is usually `ports/<port>/boards/manifest.py`, unless your board
-brings its own. Then build as usual. The include brings in the `lvgl` C module
-and freezes `fs_driver`. Tested on the
-unix port against MicroPython v1.29.0, where `import lvgl` reports 9.5.
-
-If you would rather not edit the MicroPython tree, write a manifest of your own
-and pass it as `FROZEN_MANIFEST=`. That replaces the port's default, so include
-the default too (`include("$(PORT_DIR)/variants/standard/manifest.py")` on
-unix, `include("$(PORT_DIR)/boards/manifest.py")` on esp32) or you lose
-`asyncio` and the port's other frozen modules.
-
-**Older than 1.29?** Manifests there have no `c_module()`, so this one will not
-load; use `USER_C_MODULES`, and freeze the two helpers from `lib/` yourself if
-you want them. On esp32 and rp2 point it at this repository:
-
 ```bash
-make BOARD=ESP32_GENERIC_S3 USER_C_MODULES=/abs/path/to/lvgl-micropython
+git clone https://github.com/PyDevices/lvgl-micropython
+cd micropython/ports/unix
+make
 ```
 
-On Make ports such as unix point it at the directory that *contains* this
-repository, which builds every module in that directory:
-
-```bash
-cd micropython/ports/unix && make USER_C_MODULES=../../..
-```
-
-## JPEG images need jpegio
-
-`lv.image` draws PNG and LVGL's own BIN format on any build of this module. It
-draws **nothing at all** for a JPEG unless the [jpegio](https://github.com/PyDevices/micropython-pydevices/tree/main/modules/jpegio) module is in the
-same firmware.
-
-The decoder moved. `LV_USE_TJPGD` is 0 in the bindings, so LVGL's built-in
-JPEG decoder is not compiled in; jpegio registers its own TJpgDec with LVGL
-through `lv_image_decoder_create` when the two are built together. The point
-was one TJpgDec per firmware instead of two, without carrying a fork of LVGL,
-but it means a build of this module alone silently skips JPEGs at run time
-rather than failing at build time.
-
-So name jpegio when you want JPEG:
-
-```bash
-micropython-pydevices/build_mp.py --port unix --variant pydevices --modules jpegio,lvgl-micropython
-```
-
-jpegio lives in micropython-pydevices' `modules/jpegio` (it was part of
-displayif until 2026-10-06). Both of this module's build files print a note
-when jpegio isn't in the build, so you are told at build time rather than
-finding out from a blank image. From jpegio's side,
-`jpegio.register_lvgl_decoder()` and `jpegio.lvgl_decoders()` exist on every
-build and report what happened.
-
-## Build with other user C modules (optional)
-
-To build several user C modules together across ports, name them in one
-manifest: this repository's `manifest.py` carries `c_module(".")`, and a
-manifest that `include()`s several such files builds them all.
-[micropython-pydevices](https://github.com/PyDevices/micropython-pydevices)'
-`build_mp.py` does that for you: name the modules and it builds them on any
-port, with upstream's own boards:
-
-```bash
-micropython-pydevices/build_mp.py --port unix --variant pydevices --modules displayif,jpegio,lvgl-micropython
-```
-
-jpegio comes along for JPEG: it owns the TJpgDec decoder LVGL draws JPEGs
-through.
-
-## App Usage & Timer Model
-
-With pydevices installed, pydevices' `display_driver` drives LVGL from `machine.Timer` (hardware interrupts):
-- **Interactive REPL (`micropython -i` or on-board prompt)**: Simply create widgets and drop out to the prompt. Hardware timer interrupts keep LVGL animations, timers, and touch input running continuously in the background while you inspect variables or test code interactively.
-- **Standalone Scripts**: Use `app.run()` if you need an explicit loop for non-interactive desktop scripts.
+The build fetches the matching LVGL bindings itself; you need only `git`.
 
 ```python
-import display_driver  # noqa: F401 - initializes display, input, and machine.Timer
 import lvgl as lv
 
-scr = lv.screen_active()
-btn = lv.button(scr)
-btn.center()
-label = lv.label(btn)
-label.set_text("Hello MicroPython LVGL!")
+lv.init()
+disp = lv.display_create(240, 120)
+disp.set_color_format(lv.COLOR_FORMAT.RGB565)
+buf = bytearray(240 * 120 * 2)
+disp.set_buffers(buf, None, len(buf), lv.DISPLAY_RENDER_MODE.FULL)
+flushed = []
+disp.set_flush_cb(lambda d, area, px: (flushed.append(area.get_width()), d.flush_ready()))
 
-# Dropping out the bottom leaves the UI active in the background!
+button = lv.button(lv.screen_active())
+button.center()
+label = lv.label(button)
+label.set_text("Hello from LVGL")
+button.add_event_cb(lambda e: print("clicked"), lv.EVENT.CLICKED, None)
+button.send_event(lv.EVENT.CLICKED, None)
+
+lv.tick_inc(50)
+lv.refr_now(disp)
+print(label.get_text(), "- drew", flushed[-1], "px wide")
 ```
 
-## Smoke test
-
-```bash
-./micropython/ports/unix/build-standard/micropython ./lvgl-bindings/tools/test_lvgl_smoke.py
+```text
+clicked
+Hello from LVGL - drew 240 px wide
 ```
 
-The smoke suite belongs to the exact pinned `lvgl-bindings` source; this repo does not forward or duplicate it.
+The picture at the top is the frame that program drew.
 
-## Files
+[Docs](https://github.com/PyDevices/lvgl-bindings/blob/main/docs/get-started/install.md#micropython-compatible-firmware-with-lvgl-micropython) · [Examples](https://pydevices.github.io/pydevices-examples/pyscript/) · [Roadmap](ROADMAP.md)
 
-| Path | Role |
-|---|---|
-| `micropython.mk` | Make ports (pre-1.29: `USER_C_MODULES` = parent directory) |
-| `micropython.cmake` | CMake ports (pre-1.29: `USER_C_MODULES` = this repo) |
-| `src/lv_mem_core_micropython.c` | GC-aware LVGL allocator |
-| `manifest.py` | Names the C module and freezes `lib/fs_driver.py` (synced from lvgl-bindings) |
-| `lib/fs_driver.py` | Python-backed LVGL filesystem driver (`import fs_driver`) |
-| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit a build fetches when you give it no checkout |
-| `scripts/sync_from_lvgl_bindings.sh` | Refresh helpers and record an exact commit/tag |
-| `scripts/fetch_bindings.sh` | Fetch the pinned lvgl-bindings into `.deps/` (the build runs it) |
-
-CircuitPython integration lives in [lvgl-circuitpython](https://github.com/PyDevices/lvgl-circuitpython).
+OmniPython is made by [PyDevices](https://pydevices.com).

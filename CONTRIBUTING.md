@@ -5,7 +5,7 @@ publishes no package. Change binding generation and the synced helper sources in
 [lvgl-bindings](https://github.com/PyDevices/lvgl-bindings), then regenerate and
 sync. Change this repository for MicroPython build integration, allocator
 behavior or interpreter lifecycle. How to use the module is in the
-[docs site](https://lvgl.readthedocs.io), built from lvgl-bindings.
+[docs site](https://github.com/PyDevices/lvgl-bindings/blob/main/docs/index.md), built from lvgl-bindings.
 
 A good first contribution is a focused integration or finalizer test, a fix to
 the build documentation, or a change backed by the pinned binding smoke suite.

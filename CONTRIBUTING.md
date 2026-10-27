@@ -32,7 +32,7 @@ here.
 Lay out the repositories side by side:
 
 ```text
-workspace/
+checkouts/
   lvgl-micropython/
   lvgl-bindings/
   micropython/

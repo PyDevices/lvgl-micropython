@@ -48,6 +48,6 @@ Hello from LVGL - drew 240 px wide
 
 The picture at the top is the frame that program drew.
 
-[Docs](https://github.com/PyDevices/lvgl-bindings/blob/main/docs/get-started/install.md#micropython-compatible-firmware-with-lvgl-micropython) · [Examples](https://pydevices.github.io/pydevices-examples/pyscript/) · [Roadmap](ROADMAP.md)
+[Docs](https://github.com/PyDevices/lvgl-bindings/blob/main/docs/get-started/install.md#micropython-compatible-firmware-with-lvgl-micropython) · [Examples](https://pydevices.github.io/gallery/pyscript/) · [Roadmap](ROADMAP.md)
 
 OmniPython is made by [PyDevices](https://pydevices.com).

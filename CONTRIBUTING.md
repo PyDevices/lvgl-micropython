@@ -22,7 +22,7 @@ here.
 | [`src/lv_mem_core_micropython.c`](src/lv_mem_core_micropython.c) | The GC-aware LVGL allocator |
 | [`src/lvgl_micropython_build.c`](src/lvgl_micropython_build.c) | `lvgl_micropython.__revision__`, the build stamp |
 | `lib/fs_driver.py` | LVGL filesystem driver, synced from lvgl-bindings |
-| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit a build fetches when it has no checkout to use |
+| `LVGL_BINDINGS_COMMIT` | The lvgl-bindings commit a build fetches when it has no checkout to use. micropython-pydevices' firmware builds take the commit in its `modules.lock` instead |
 | [`scripts/fetch_bindings.sh`](scripts/fetch_bindings.sh) | Fetches that commit into `.deps/` (the build runs it) |
 | [`scripts/sync_from_lvgl_bindings.sh`](scripts/sync_from_lvgl_bindings.sh) | Refreshes the helpers and records an exact commit or tag |
 | `tests/` | GC finalizer and integration tests |
